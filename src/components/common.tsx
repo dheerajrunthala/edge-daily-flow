@@ -12,7 +12,15 @@ export function Logo({ className }: { className?: string }) {
   );
 }
 
-export function TagChip({ name, color, className }: { name: string; color?: string | undefined; className?: string | undefined }) {
+export function TagChip({
+  name,
+  color,
+  className,
+}: {
+  name: string;
+  color?: string | undefined;
+  className?: string | undefined;
+}) {
   return (
     <span
       className={cn(
@@ -30,7 +38,15 @@ export function AiMark({ className }: { className?: string }) {
   return <Sparkles className={cn("size-3.5 text-ai", className)} aria-label="AI generated" />;
 }
 
-export function Card({ className, children, ai }: { className?: string; children: ReactNode; ai?: boolean | undefined }) {
+export function Card({
+  className,
+  children,
+  ai,
+}: {
+  className?: string;
+  children: ReactNode;
+  ai?: boolean | undefined;
+}) {
   return (
     <div
       className={cn(
@@ -93,7 +109,15 @@ export function ListSkeleton({ rows = 3 }: { rows?: number }) {
   );
 }
 
-export function PageHeader({ title, subtitle, action }: { title: ReactNode; subtitle?: ReactNode; action?: ReactNode }) {
+export function PageHeader({
+  title,
+  subtitle,
+  action,
+}: {
+  title: ReactNode;
+  subtitle?: ReactNode;
+  action?: ReactNode;
+}) {
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
       <div>

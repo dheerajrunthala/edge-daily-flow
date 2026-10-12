@@ -12,7 +12,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 export type TaskDraft = {
   id?: string | undefined;
@@ -28,7 +34,17 @@ export type TaskDraft = {
 };
 
 export function emptyDraft(): TaskDraft {
-  return { title: "", notes: "", date: "", time: "09:00", all_day: false, recurrence: "none", priority: "medium", tags: [], remind: "" };
+  return {
+    title: "",
+    notes: "",
+    date: "",
+    time: "09:00",
+    all_day: false,
+    recurrence: "none",
+    priority: "medium",
+    tags: [],
+    remind: "",
+  };
 }
 
 export function taskToDraft(t: Partial<Task>, tz: string): TaskDraft {
@@ -50,7 +66,9 @@ export function draftToRow(d: TaskDraft, tz: string): TablesInsert<"tasks"> {
   return {
     title: d.title.trim(),
     notes: d.notes.trim() || null,
-    due_at: d.date ? fromKeys(d.date, d.all_day ? "00:00" : d.time || "09:00", tz).toISOString() : null,
+    due_at: d.date
+      ? fromKeys(d.date, d.all_day ? "00:00" : d.time || "09:00", tz).toISOString()
+      : null,
     all_day: d.date ? d.all_day : false,
     recurrence: d.date ? d.recurrence : "none",
     priority: d.priority,
@@ -76,11 +94,22 @@ export function TaskFields({ draft, set }: { draft: TaskDraft; set: (d: TaskDraf
         className="h-11 rounded-xl text-base"
         autoFocus
       />
-      <Textarea placeholder="Notes" rows={2} value={draft.notes} onChange={(e) => up({ notes: e.target.value })} className="rounded-xl" />
+      <Textarea
+        placeholder="Notes"
+        rows={2}
+        value={draft.notes}
+        onChange={(e) => up({ notes: e.target.value })}
+        className="rounded-xl"
+      />
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
           <Label>Due date</Label>
-          <Input type="date" value={draft.date} onChange={(e) => up({ date: e.target.value })} className="h-11 rounded-xl" />
+          <Input
+            type="date"
+            value={draft.date}
+            onChange={(e) => up({ date: e.target.value })}
+            className="h-11 rounded-xl"
+          />
         </div>
         <div className="space-y-1.5">
           <Label>Time</Label>
@@ -100,19 +129,31 @@ export function TaskFields({ draft, set }: { draft: TaskDraft; set: (d: TaskDraf
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
           <Label>Repeat</Label>
-          <Select value={draft.recurrence} onValueChange={(v) => up({ recurrence: v as Task["recurrence"] })}>
-            <SelectTrigger className="h-11 rounded-xl"><SelectValue /></SelectTrigger>
+          <Select
+            value={draft.recurrence}
+            onValueChange={(v) => up({ recurrence: v as Task["recurrence"] })}
+          >
+            <SelectTrigger className="h-11 rounded-xl">
+              <SelectValue />
+            </SelectTrigger>
             <SelectContent>
               {["none", "daily", "weekly", "monthly", "yearly"].map((r) => (
-                <SelectItem key={r} value={r}>{r === "none" ? "Doesn't repeat" : r.charAt(0).toUpperCase() + r.slice(1)}</SelectItem>
+                <SelectItem key={r} value={r}>
+                  {r === "none" ? "Doesn't repeat" : r.charAt(0).toUpperCase() + r.slice(1)}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
         <div className="space-y-1.5">
           <Label>Priority</Label>
-          <Select value={draft.priority} onValueChange={(v) => up({ priority: v as Task["priority"] })}>
-            <SelectTrigger className="h-11 rounded-xl"><SelectValue /></SelectTrigger>
+          <Select
+            value={draft.priority}
+            onValueChange={(v) => up({ priority: v as Task["priority"] })}
+          >
+            <SelectTrigger className="h-11 rounded-xl">
+              <SelectValue />
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="low">Low</SelectItem>
               <SelectItem value="medium">Medium</SelectItem>
@@ -123,11 +164,18 @@ export function TaskFields({ draft, set }: { draft: TaskDraft; set: (d: TaskDraf
       </div>
       <div className="space-y-1.5">
         <Label>Remind me</Label>
-        <Select value={draft.remind || "none"} onValueChange={(v) => up({ remind: v === "none" ? "" : v })}>
-          <SelectTrigger className="h-11 rounded-xl"><SelectValue /></SelectTrigger>
+        <Select
+          value={draft.remind || "none"}
+          onValueChange={(v) => up({ remind: v === "none" ? "" : v })}
+        >
+          <SelectTrigger className="h-11 rounded-xl">
+            <SelectValue />
+          </SelectTrigger>
           <SelectContent>
             {REMIND_OPTIONS.map((o) => (
-              <SelectItem key={o.label} value={o.value || "none"}>{o.label}</SelectItem>
+              <SelectItem key={o.label} value={o.value || "none"}>
+                {o.label}
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -141,8 +189,15 @@ export function TaskFields({ draft, set }: { draft: TaskDraft; set: (d: TaskDraf
               <button
                 type="button"
                 key={t.id}
-                onClick={() => up({ tags: on ? draft.tags.filter((x) => x !== t.name) : [...draft.tags, t.name] })}
-                className={cn("rounded-full ring-offset-2 ring-offset-background transition-calm", on && "ring-2 ring-primary")}
+                onClick={() =>
+                  up({
+                    tags: on ? draft.tags.filter((x) => x !== t.name) : [...draft.tags, t.name],
+                  })
+                }
+                className={cn(
+                  "rounded-full ring-offset-2 ring-offset-background transition-calm",
+                  on && "ring-2 ring-primary",
+                )}
               >
                 <TagChip name={t.name} color={t.color} className="px-3 py-1.5" />
               </button>
@@ -158,7 +213,12 @@ export function TaskFields({ draft, set }: { draft: TaskDraft; set: (d: TaskDraf
         </div>
         {adding && (
           <div className="space-y-2 rounded-xl border border-border p-3">
-            <Input placeholder="Tag name" value={newTag} onChange={(e) => setNewTag(e.target.value)} className="h-10 rounded-lg" />
+            <Input
+              placeholder="Tag name"
+              value={newTag}
+              onChange={(e) => setNewTag(e.target.value)}
+              className="h-10 rounded-lg"
+            />
             <ColorPicker value={newColor} onChange={setNewColor} />
             <Button
               type="button"
@@ -190,7 +250,10 @@ export function ColorPicker({ value, onChange }: { value: string; onChange: (c: 
           key={c}
           aria-label={c}
           onClick={() => onChange(c)}
-          className={cn("tag-chip flex size-8 items-center justify-center rounded-full", `tag-${c}`)}
+          className={cn(
+            "tag-chip flex size-8 items-center justify-center rounded-full",
+            `tag-${c}`,
+          )}
         >
           <span className="tag-dot flex size-4 items-center justify-center rounded-full">
             {value === c && <Check className="size-3 text-background" />}
@@ -220,12 +283,18 @@ export function TaskDialog({
   }, [open, initial]);
 
   return (
-    <ResponsiveModal open={open} onOpenChange={onOpenChange} title={draft.id ? "Edit task" : "New task"}>
+    <ResponsiveModal
+      open={open}
+      onOpenChange={onOpenChange}
+      title={draft.id ? "Edit task" : "New task"}
+    >
       <form
         onSubmit={async (e) => {
           e.preventDefault();
           if (!draft.title.trim()) return;
-          await save.mutateAsync(draft.id ? { ...draftToRow(draft, tz), id: draft.id } : draftToRow(draft, tz));
+          await save.mutateAsync(
+            draft.id ? { ...draftToRow(draft, tz), id: draft.id } : draftToRow(draft, tz),
+          );
           onOpenChange(false);
         }}
       >
@@ -246,7 +315,11 @@ export function TaskDialog({
           ) : (
             <span />
           )}
-          <Button type="submit" className="h-11 rounded-xl px-6" disabled={!draft.title.trim() || save.isPending}>
+          <Button
+            type="submit"
+            className="h-11 rounded-xl px-6"
+            disabled={!draft.title.trim() || save.isPending}
+          >
             {save.isPending && <Loader2 className="animate-spin" />} Save
           </Button>
         </div>

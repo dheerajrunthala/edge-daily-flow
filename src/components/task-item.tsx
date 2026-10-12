@@ -41,7 +41,9 @@ export function TaskItem({
         <span
           className={cn(
             "flex size-5 items-center justify-center rounded-full border-[1.5px] transition-calm",
-            done ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40 hover:border-primary",
+            done
+              ? "border-primary bg-primary text-primary-foreground"
+              : "border-muted-foreground/40 hover:border-primary",
             task.priority === "high" && !done && "border-overdue",
           )}
         >
@@ -51,13 +53,17 @@ export function TaskItem({
       <button onClick={() => onOpen?.(task)} className="min-w-0 flex-1 pt-0.5 text-left">
         <p className={cn("text-sm", done && "text-muted-foreground line-through")}>{task.title}</p>
         <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-          {task.due_at && <span className={cn(overdue && "font-medium text-overdue")}>{dueLabel(task, tz)}</span>}
+          {task.due_at && (
+            <span className={cn(overdue && "font-medium text-overdue")}>{dueLabel(task, tz)}</span>
+          )}
           {task.recurrence !== "none" && (
             <span className="inline-flex items-center gap-0.5">
               <Repeat className="size-3" /> {task.recurrence}
             </span>
           )}
-          {task.source === "ai" && <Sparkles className="size-3 text-ai" aria-label="Created by AI" />}
+          {task.source === "ai" && (
+            <Sparkles className="size-3 text-ai" aria-label="Created by AI" />
+          )}
           {task.tags.map((t) => (
             <TagChip key={t} name={t} color={color(t)} />
           ))}

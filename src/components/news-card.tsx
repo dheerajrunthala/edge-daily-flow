@@ -3,7 +3,15 @@ import { cn } from "@/lib/utils";
 import { relativeTime } from "@/lib/tz";
 import { useToggleSaved, type NewsItem } from "@/lib/queries";
 
-export function NewsCard({ item, onFollowUp, compact }: { item: NewsItem; onFollowUp?: (id: string) => void; compact?: boolean }) {
+export function NewsCard({
+  item,
+  onFollowUp,
+  compact,
+}: {
+  item: NewsItem;
+  onFollowUp?: (id: string) => void;
+  compact?: boolean;
+}) {
   const toggle = useToggleSaved();
   return (
     <article className="rounded-2xl border border-border bg-card p-5 transition-calm hover:shadow-soft">
@@ -18,8 +26,12 @@ export function NewsCard({ item, onFollowUp, compact }: { item: NewsItem; onFoll
           </button>
         )}
       </div>
-      <h3 className={cn("font-serif leading-snug", compact ? "text-lg" : "text-xl")}>{item.headline}</h3>
-      {!compact && <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{item.summary}</p>}
+      <h3 className={cn("font-serif leading-snug", compact ? "text-lg" : "text-xl")}>
+        {item.headline}
+      </h3>
+      {!compact && (
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{item.summary}</p>
+      )}
       {!compact && item.why_it_matters && (
         <p className="mt-3 text-sm text-ai-muted">
           <span className="font-medium">Why it matters: </span>

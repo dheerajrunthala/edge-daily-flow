@@ -6,7 +6,21 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", ".output", ".vinxi"] },
+  // The supabase/ integration files and routeTree.gen.ts are generated (by Lovable and
+  // `supabase gen types`); linting them only churns on the next regeneration.
+  {
+    ignores: [
+      "dist",
+      ".output",
+      ".vinxi",
+      "src/routeTree.gen.ts",
+      "src/integrations/supabase/types.ts",
+      "src/integrations/supabase/client.ts",
+      "src/integrations/supabase/client.server.ts",
+      "src/integrations/supabase/auth-middleware.ts",
+      "src/integrations/supabase/previewAuthStorage.ts",
+    ],
+  },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ["**/*.{ts,tsx}"],

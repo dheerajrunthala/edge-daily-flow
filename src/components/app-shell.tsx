@@ -1,6 +1,15 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { BarChart3, CheckSquare, LogOut, Newspaper, PanelLeftClose, PanelLeftOpen, Settings, Sun } from "lucide-react";
+import {
+  BarChart3,
+  CheckSquare,
+  LogOut,
+  Newspaper,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Settings,
+  Sun,
+} from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Logo } from "./common";
@@ -55,7 +64,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             className="rounded-lg p-2 text-muted-foreground transition-calm hover:bg-sidebar-accent hover:text-foreground"
             aria-label="Toggle sidebar"
           >
-            {collapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
+            {collapsed ? (
+              <PanelLeftOpen className="size-4" />
+            ) : (
+              <PanelLeftClose className="size-4" />
+            )}
           </button>
         </div>
         <nav className="flex flex-1 flex-col gap-0.5 px-3">
@@ -92,7 +105,9 @@ export function AppShell({ children }: { children: ReactNode }) {
       </header>
 
       <main className={cn("transition-calm", collapsed ? "lg:pl-[68px]" : "lg:pl-60")}>
-        <div className="mx-auto w-full max-w-[1100px] px-4 pb-28 pt-6 md:px-8 lg:pb-16 lg:pt-10">{children}</div>
+        <div className="mx-auto w-full max-w-[1100px] px-4 pb-28 pt-6 md:px-8 lg:pb-16 lg:pt-10">
+          {children}
+        </div>
       </main>
 
       {/* Mobile bottom tabs */}

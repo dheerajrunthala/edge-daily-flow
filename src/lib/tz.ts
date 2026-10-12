@@ -16,7 +16,15 @@ export function allTimezones(): string[] {
   } catch {
     /* ignore */
   }
-  return ["Asia/Kolkata", "UTC", "Europe/London", "America/New_York", "America/Los_Angeles", "Asia/Singapore", "Asia/Tokyo"];
+  return [
+    "Asia/Kolkata",
+    "UTC",
+    "Europe/London",
+    "America/New_York",
+    "America/Los_Angeles",
+    "Asia/Singapore",
+    "Asia/Tokyo",
+  ];
 }
 
 type Parts = { y: number; m: number; d: number; h: number; min: number; s: number };
@@ -35,7 +43,14 @@ export function partsInTz(date: Date, tz: string): Parts {
   const p: Record<string, string> = {};
   for (const x of f.formatToParts(date)) p[x.type] = x.value;
   const n = (k: string) => Number(p[k] ?? 0);
-  return { y: n("year"), m: n("month"), d: n("day"), h: n("hour") % 24, min: n("minute"), s: n("second") };
+  return {
+    y: n("year"),
+    m: n("month"),
+    d: n("day"),
+    h: n("hour") % 24,
+    min: n("minute"),
+    s: n("second"),
+  };
 }
 
 function offsetMs(date: Date, tz: string) {
@@ -44,7 +59,14 @@ function offsetMs(date: Date, tz: string) {
 }
 
 /** Convert wall-clock time in tz to a UTC Date. */
-export function zonedToUtc(y: number, m: number, d: number, h: number, min: number, tz: string): Date {
+export function zonedToUtc(
+  y: number,
+  m: number,
+  d: number,
+  h: number,
+  min: number,
+  tz: string,
+): Date {
   const guess = Date.UTC(y, m - 1, d, h, min);
   let t = guess - offsetMs(new Date(guess), tz);
   t = guess - offsetMs(new Date(t), tz);

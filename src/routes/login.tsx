@@ -12,9 +12,15 @@ export const Route = createFileRoute("/login")({
   head: () => ({
     meta: [
       { title: "Sign in — Daily Edge" },
-      { name: "description", content: "Sign in to Daily Edge with a magic link sent to your email." },
+      {
+        name: "description",
+        content: "Sign in to Daily Edge with a magic link sent to your email.",
+      },
       { property: "og:title", content: "Sign in — Daily Edge" },
-      { property: "og:description", content: "Sign in to Daily Edge with a magic link sent to your email." },
+      {
+        property: "og:description",
+        content: "Sign in to Daily Edge with a magic link sent to your email.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
     ],
@@ -66,8 +72,8 @@ function Login() {
             </div>
             <h1 className="mt-4 text-xl font-semibold">Check your inbox</h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              We sent a sign-in link to <span className="font-medium text-foreground">{email}</span>. Open it on
-              this device to continue.
+              We sent a sign-in link to <span className="font-medium text-foreground">{email}</span>
+              . Open it on this device to continue.
             </p>
             <Button variant="ghost" className="mt-6 rounded-xl" onClick={() => setSent(false)}>
               <ArrowLeft /> Use a different email
@@ -77,7 +83,9 @@ function Login() {
           <form onSubmit={submit} className="space-y-5">
             <div>
               <h1 className="text-xl font-semibold">Sign in or sign up</h1>
-              <p className="mt-1 text-sm text-muted-foreground">We'll email you a magic link — no password needed.</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                We'll email you a magic link — no password needed.
+              </p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>

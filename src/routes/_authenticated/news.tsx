@@ -9,7 +9,13 @@ import { ResponsiveModal } from "@/components/responsive-modal";
 import { fetchNewsItem, useDigests, useNewsItems, useSavedItems, useTz } from "@/lib/queries";
 import { fmt, fromKeys } from "@/lib/tz";
 import { cn } from "@/lib/utils";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 export const Route = createFileRoute("/_authenticated/news")({
   head: () => ({
@@ -17,7 +23,10 @@ export const Route = createFileRoute("/_authenticated/news")({
       { title: "News — Daily Edge" },
       { name: "description", content: "Your daily AI-curated news digest, grouped by topic." },
       { property: "og:title", content: "News — Daily Edge" },
-      { property: "og:description", content: "Your daily AI-curated news digest, grouped by topic." },
+      {
+        property: "og:description",
+        content: "Your daily AI-curated news digest, grouped by topic.",
+      },
     ],
   }),
   component: NewsPage,
@@ -42,7 +51,13 @@ function NewsPage() {
     return [...map.entries()];
   }, [items]);
 
-  const dateLabel = (d: string) => fmt(fromKeys(d, "12:00", tz), tz, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+  const dateLabel = (d: string) =>
+    fmt(fromKeys(d, "12:00", tz), tz, {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
 
   return (
     <AppShell>
@@ -51,10 +66,14 @@ function NewsPage() {
         action={
           tab === "digest" && digests && digests.length > 0 ? (
             <Select value={digestId ?? ""} onValueChange={setDigestId}>
-              <SelectTrigger className="h-10 w-56 rounded-xl"><SelectValue placeholder="Pick a date" /></SelectTrigger>
+              <SelectTrigger className="h-10 w-56 rounded-xl">
+                <SelectValue placeholder="Pick a date" />
+              </SelectTrigger>
               <SelectContent>
                 {digests.map((d) => (
-                  <SelectItem key={d.id} value={d.id}>{dateLabel(d.digest_date)}</SelectItem>
+                  <SelectItem key={d.id} value={d.id}>
+                    {dateLabel(d.digest_date)}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -86,15 +105,21 @@ function NewsPage() {
           <div className="space-y-10">
             {digest?.summary && (
               <Card ai className="p-6">
-                <p className="flex items-center gap-1.5 text-xs font-medium text-ai"><AiMark /> Summary</p>
+                <p className="flex items-center gap-1.5 text-xs font-medium text-ai">
+                  <AiMark /> Summary
+                </p>
                 <p className="mt-2 font-serif text-lg leading-relaxed">{digest.summary}</p>
                 <p className="mt-3 text-xs text-muted-foreground">
                   {digest.items_count} stories from {digest.sources_scanned} articles scanned
                 </p>
               </Card>
             )}
-            {digest?.status === "pending" && <EmptyState icon={Newspaper}>This digest is still being prepared.</EmptyState>}
-            {digest?.status === "failed" && <EmptyState icon={Newspaper}>This digest couldn't be generated.</EmptyState>}
+            {digest?.status === "pending" && (
+              <EmptyState icon={Newspaper}>This digest is still being prepared.</EmptyState>
+            )}
+            {digest?.status === "failed" && (
+              <EmptyState icon={Newspaper}>This digest couldn't be generated.</EmptyState>
+            )}
             {grouped.map(([cat, list]) => (
               <section key={cat}>
                 <h2 className="mb-3 font-serif text-2xl">{cat}</h2>
@@ -124,7 +149,15 @@ function NewsPage() {
   );
 }
 
-function FollowUp({ id, onClose, onFollowUp }: { id: string | null; onClose: () => void; onFollowUp: (id: string) => void }) {
+function FollowUp({
+  id,
+  onClose,
+  onFollowUp,
+}: {
+  id: string | null;
+  onClose: () => void;
+  onFollowUp: (id: string) => void;
+}) {
   const { data, isLoading } = useQuery({
     queryKey: ["news_item", id],
     enabled: !!id,
@@ -132,7 +165,13 @@ function FollowUp({ id, onClose, onFollowUp }: { id: string | null; onClose: () 
   });
   return (
     <ResponsiveModal open={!!id} onOpenChange={(o) => !o && onClose()} title="Earlier story">
-      {isLoading ? <ListSkeleton rows={2} /> : data ? <NewsCard item={data} onFollowUp={onFollowUp} /> : <p className="text-sm text-muted-foreground">Story not found.</p>}
+      {isLoading ? (
+        <ListSkeleton rows={2} />
+      ) : data ? (
+        <NewsCard item={data} onFollowUp={onFollowUp} />
+      ) : (
+        <p className="text-sm text-muted-foreground">Story not found.</p>
+      )}
     </ResponsiveModal>
   );
 }

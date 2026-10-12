@@ -11,12 +11,14 @@ export const Route = createFileRoute("/")({
       { title: "Daily Edge — Your day, distilled by AI" },
       {
         name: "description",
-        content: "AI-organized tasks and a personalized daily news brief, delivered to your inbox every morning.",
+        content:
+          "AI-organized tasks and a personalized daily news brief, delivered to your inbox every morning.",
       },
       { property: "og:title", content: "Daily Edge — Your day, distilled by AI" },
       {
         property: "og:description",
-        content: "AI-organized tasks and a personalized daily news brief, delivered to your inbox every morning.",
+        content:
+          "AI-organized tasks and a personalized daily news brief, delivered to your inbox every morning.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
@@ -68,8 +70,8 @@ function Landing() {
           Your day, distilled by AI.
         </h1>
         <p className="mx-auto mt-5 max-w-xl text-base text-muted-foreground md:text-lg">
-          Tasks organized from plain sentences, and a personalized daily news brief waiting in your inbox each
-          morning.
+          Tasks organized from plain sentences, and a personalized daily news brief waiting in your
+          inbox each morning.
         </p>
         <div className="mt-8 flex justify-center">
           <Button asChild size="lg" className="h-12 rounded-xl px-6 text-base">
@@ -116,8 +118,8 @@ function ProductMock() {
               <AiMark /> Today at a glance
             </p>
             <p className="mt-3 font-serif text-lg leading-snug">
-              RBI holds rates steady while Nifty IT rallies on strong deal wins. A new open-weights model tops coding
-              benchmarks — worth a look before your 3pm architecture review.
+              RBI holds rates steady while Nifty IT rallies on strong deal wins. A new open-weights
+              model tops coding benchmarks — worth a look before your 3pm architecture review.
             </p>
             <div className="mt-5 space-y-3 border-t border-border pt-4">
               {[

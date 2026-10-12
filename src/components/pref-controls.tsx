@@ -4,11 +4,23 @@ import { cn } from "@/lib/utils";
 import { allTimezones, fmt, fromKeys, dayKey } from "@/lib/tz";
 import { CATEGORIES } from "@/lib/queries";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import {
+  Command,
+  CommandEmpty,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-export function TimezoneSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+export function TimezoneSelect({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   const zones = useMemo(() => allTimezones(), []);
   return (
@@ -44,7 +56,13 @@ export function TimezoneSelect({ value, onChange }: { value: string; onChange: (
   );
 }
 
-export function CategoryPicker({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+export function CategoryPicker({
+  value,
+  onChange,
+}: {
+  value: string[];
+  onChange: (v: string[]) => void;
+}) {
   return (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
       {CATEGORIES.map((c) => {
@@ -93,7 +111,9 @@ export function Segmented<T extends string | number>({
           onClick={() => onChange(o)}
           className={cn(
             "min-h-10 min-w-14 rounded-lg px-4 text-sm transition-calm",
-            o === value ? "bg-card font-medium shadow-soft" : "text-muted-foreground hover:text-foreground",
+            o === value
+              ? "bg-card font-medium shadow-soft"
+              : "text-muted-foreground hover:text-foreground",
           )}
         >
           {o}
@@ -103,7 +123,15 @@ export function Segmented<T extends string | number>({
   );
 }
 
-export function EmailTimes({ value, onChange, tz }: { value: string[]; onChange: (v: string[]) => void; tz: string }) {
+export function EmailTimes({
+  value,
+  onChange,
+  tz,
+}: {
+  value: string[];
+  onChange: (v: string[]) => void;
+  tz: string;
+}) {
   const [draft, setDraft] = useState("12:00");
   const today = dayKey(new Date(), tz);
   const sorted = [...value].sort();
@@ -111,7 +139,10 @@ export function EmailTimes({ value, onChange, tz }: { value: string[]; onChange:
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2">
         {sorted.map((t) => (
-          <span key={t} className="inline-flex items-center gap-1 rounded-full border border-border bg-card py-1 pl-3 pr-1 text-sm">
+          <span
+            key={t}
+            className="inline-flex items-center gap-1 rounded-full border border-border bg-card py-1 pl-3 pr-1 text-sm"
+          >
             {fmt(fromKeys(today, t, tz), tz, { hour: "numeric", minute: "2-digit" })}
             <button
               type="button"
@@ -123,10 +154,19 @@ export function EmailTimes({ value, onChange, tz }: { value: string[]; onChange:
             </button>
           </span>
         ))}
-        {!value.length && <span className="text-sm text-muted-foreground">No email times — you won't get emails.</span>}
+        {!value.length && (
+          <span className="text-sm text-muted-foreground">
+            No email times — you won't get emails.
+          </span>
+        )}
       </div>
       <div className="flex gap-2">
-        <Input type="time" value={draft} onChange={(e) => setDraft(e.target.value)} className="h-11 w-36 rounded-xl" />
+        <Input
+          type="time"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          className="h-11 w-36 rounded-xl"
+        />
         <Button
           type="button"
           variant="outline"

@@ -6,7 +6,15 @@ import { AppShell, useSignOut } from "@/components/app-shell";
 import { Card, ListSkeleton, PageHeader, TagChip } from "@/components/common";
 import { CategoryPicker, EmailTimes, Segmented, TimezoneSelect } from "@/components/pref-controls";
 import { ColorPicker } from "@/components/task-form";
-import { usePrefs, useProfile, useTagMutations, useTags, useUpdatePrefs, useUpdateProfile, type Tag } from "@/lib/queries";
+import {
+  usePrefs,
+  useProfile,
+  useTagMutations,
+  useTags,
+  useUpdatePrefs,
+  useUpdateProfile,
+  type Tag,
+} from "@/lib/queries";
 import { useTheme, type ThemePref } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -20,9 +28,15 @@ export const Route = createFileRoute("/_authenticated/settings")({
   head: () => ({
     meta: [
       { title: "Settings — Daily Edge" },
-      { name: "description", content: "Manage your profile, news preferences, email times and tags." },
+      {
+        name: "description",
+        content: "Manage your profile, news preferences, email times and tags.",
+      },
       { property: "og:title", content: "Settings — Daily Edge" },
-      { property: "og:description", content: "Manage your profile, news preferences, email times and tags." },
+      {
+        property: "og:description",
+        content: "Manage your profile, news preferences, email times and tags.",
+      },
     ],
   }),
   component: SettingsPage,
@@ -68,21 +82,42 @@ function SettingsPage() {
             <Section title="Profile">
               <div className="space-y-2">
                 <Label htmlFor="name">Name</Label>
-                <Input id="name" value={name} onChange={(e) => setName(e.target.value)} className="h-11 rounded-xl" />
+                <Input
+                  id="name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="h-11 rounded-xl"
+                />
               </div>
               <div className="space-y-2">
                 <Label>Timezone</Label>
-                <TimezoneSelect value={profile.timezone} onChange={(tz) => upProfile.mutate({ timezone: tz }, { onSuccess: saved })} />
+                <TimezoneSelect
+                  value={profile.timezone}
+                  onChange={(tz) => upProfile.mutate({ timezone: tz }, { onSuccess: saved })}
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="about">About you</Label>
-                <Textarea id="about" rows={3} value={about} onChange={(e) => setAbout(e.target.value)} className="rounded-xl" />
-                <p className="text-xs text-muted-foreground">This personalizes how your news is ranked.</p>
+                <Textarea
+                  id="about"
+                  rows={3}
+                  value={about}
+                  onChange={(e) => setAbout(e.target.value)}
+                  className="rounded-xl"
+                />
+                <p className="text-xs text-muted-foreground">
+                  This personalizes how your news is ranked.
+                </p>
               </div>
               <Button
                 className="rounded-xl"
                 disabled={upProfile.isPending}
-                onClick={() => upProfile.mutate({ full_name: name.trim() || null, news_profile: about.trim() || null }, { onSuccess: saved })}
+                onClick={() =>
+                  upProfile.mutate(
+                    { full_name: name.trim() || null, news_profile: about.trim() || null },
+                    { onSuccess: saved },
+                  )
+                }
               >
                 {upProfile.isPending && <Loader2 className="animate-spin" />} Save profile
               </Button>
@@ -90,11 +125,13 @@ function SettingsPage() {
 
             <Section title="Appearance">
               <div className="inline-flex rounded-xl bg-muted p-1">
-                {([
-                  ["system", Monitor, "System"],
-                  ["light", Sun, "Light"],
-                  ["dark", Moon, "Dark"],
-                ] as [ThemePref, typeof Sun, string][]).map(([v, Icon, label]) => (
+                {(
+                  [
+                    ["system", Monitor, "System"],
+                    ["light", Sun, "Light"],
+                    ["dark", Moon, "Dark"],
+                  ] as [ThemePref, typeof Sun, string][]
+                ).map(([v, Icon, label]) => (
                   <button
                     key={v}
                     onClick={() => setTheme(v)}
@@ -118,24 +155,37 @@ function SettingsPage() {
             <Section title="News digest">
               <label className="flex min-h-11 items-center justify-between">
                 <span className="text-sm">Daily digest</span>
-                <Switch checked={prefs.enabled} onCheckedChange={(v) => upPrefs.mutate({ enabled: v })} />
+                <Switch
+                  checked={prefs.enabled}
+                  onCheckedChange={(v) => upPrefs.mutate({ enabled: v })}
+                />
               </label>
               <div className="space-y-2">
                 <Label>Topics</Label>
                 <CategoryPicker
                   value={prefs.categories}
-                  onChange={(c) => (c.length ? upPrefs.mutate({ categories: c }) : toast("Keep at least one topic"))}
+                  onChange={(c) =>
+                    c.length ? upPrefs.mutate({ categories: c }) : toast("Keep at least one topic")
+                  }
                 />
               </div>
               <div className="space-y-2">
                 <Label>Headlines per day</Label>
                 <div>
-                  <Segmented options={[10, 20, 30]} value={prefs.headline_count} onChange={(n) => upPrefs.mutate({ headline_count: n })} />
+                  <Segmented
+                    options={[10, 20, 30]}
+                    value={prefs.headline_count}
+                    onChange={(n) => upPrefs.mutate({ headline_count: n })}
+                  />
                 </div>
               </div>
             </Section>
             <Section title="Email brief" hint="When your brief lands in your inbox.">
-              <EmailTimes value={prefs.email_times} tz={profile.timezone} onChange={(t) => upPrefs.mutate({ email_times: [...t].sort() })} />
+              <EmailTimes
+                value={prefs.email_times}
+                tz={profile.timezone}
+                onChange={(t) => upPrefs.mutate({ email_times: [...t].sort() })}
+              />
             </Section>
             <Button variant="outline" className="h-11 w-full rounded-xl" onClick={signOut}>
               <LogOut /> Sign out
@@ -152,8 +202,14 @@ function TagManager() {
   if (isLoading) return <ListSkeleton rows={3} />;
   return (
     <div className="divide-y divide-border">
-      {tags?.map((t) => <TagRow key={t.id} tag={t} />)}
-      {!tags?.length && <p className="text-sm text-muted-foreground">No tags yet. Create them while adding a task.</p>}
+      {tags?.map((t) => (
+        <TagRow key={t.id} tag={t} />
+      ))}
+      {!tags?.length && (
+        <p className="text-sm text-muted-foreground">
+          No tags yet. Create them while adding a task.
+        </p>
+      )}
     </div>
   );
 }
@@ -185,7 +241,13 @@ function TagRow({ tag }: { tag: Tag }) {
         onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
         className="h-10 flex-1 rounded-lg border-transparent bg-transparent shadow-none hover:border-border focus-visible:border-border"
       />
-      <Button variant="ghost" size="icon" className="size-10 rounded-lg text-muted-foreground" aria-label="Delete tag" onClick={() => remove.mutate(tag)}>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-10 rounded-lg text-muted-foreground"
+        aria-label="Delete tag"
+        onClick={() => remove.mutate(tag)}
+      >
         <Trash2 />
       </Button>
     </div>

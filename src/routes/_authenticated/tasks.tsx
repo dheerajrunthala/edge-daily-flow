@@ -11,7 +11,13 @@ import { taskGroup, type Group, type Task } from "@/lib/task-logic";
 import { addDaysKey, dayKey, fmt, fromKeys } from "@/lib/tz";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 export const Route = createFileRoute("/_authenticated/tasks")({
   head: () => ({
@@ -19,7 +25,10 @@ export const Route = createFileRoute("/_authenticated/tasks")({
       { title: "Tasks — Daily Edge" },
       { name: "description", content: "Your tasks, organized into today, upcoming and someday." },
       { property: "og:title", content: "Tasks — Daily Edge" },
-      { property: "og:description", content: "Your tasks, organized into today, upcoming and someday." },
+      {
+        property: "og:description",
+        content: "Your tasks, organized into today, upcoming and someday.",
+      },
     ],
   }),
   component: TasksPage,
@@ -40,7 +49,10 @@ function TasksPage() {
   const [view, setView] = useState<"list" | "calendar">("list");
   const [tag, setTag] = useState("all");
   const [status, setStatus] = useState<"todo" | "done" | "all">("todo");
-  const [dialog, setDialog] = useState<{ open: boolean; draft: TaskDraft }>({ open: false, draft: emptyDraft() });
+  const [dialog, setDialog] = useState<{ open: boolean; draft: TaskDraft }>({
+    open: false,
+    draft: emptyDraft(),
+  });
   const quickRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -63,7 +75,8 @@ function TasksPage() {
   );
 
   const open = (t: Task) => setDialog({ open: true, draft: taskToDraft(t, tz) });
-  const openNew = (date?: string) => setDialog({ open: true, draft: { ...emptyDraft(), date: date ?? "" } });
+  const openNew = (date?: string) =>
+    setDialog({ open: true, draft: { ...emptyDraft(), date: date ?? "" } });
 
   return (
     <AppShell>
@@ -97,16 +110,22 @@ function TasksPage() {
 
       <div className="mt-4 flex flex-wrap gap-2">
         <Select value={tag} onValueChange={setTag}>
-          <SelectTrigger className="h-10 w-40 rounded-xl"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="h-10 w-40 rounded-xl">
+            <SelectValue />
+          </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All tags</SelectItem>
             {tags.map((t) => (
-              <SelectItem key={t.id} value={t.name}>{t.name}</SelectItem>
+              <SelectItem key={t.id} value={t.name}>
+                {t.name}
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>
         <Select value={status} onValueChange={(v) => setStatus(v as typeof status)}>
-          <SelectTrigger className="h-10 w-36 rounded-xl"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="h-10 w-36 rounded-xl">
+            <SelectValue />
+          </SelectTrigger>
           <SelectContent>
             <SelectItem value="todo">To do</SelectItem>
             <SelectItem value="done">Done</SelectItem>
@@ -120,7 +139,9 @@ function TasksPage() {
           <ListSkeleton rows={6} />
         ) : view === "list" ? (
           filtered.length === 0 ? (
-            <EmptyState icon={CheckCircle2}>Nothing here. Add a task above, or try a different filter.</EmptyState>
+            <EmptyState icon={CheckCircle2}>
+              Nothing here. Add a task above, or try a different filter.
+            </EmptyState>
           ) : (
             <div className="space-y-8">
               {GROUPS.map((g) => {
@@ -129,7 +150,8 @@ function TasksPage() {
                 return (
                   <section key={g.key}>
                     <SectionTitle tone={g.key === "overdue" ? "overdue" : undefined}>
-                      {g.label} <span className="font-normal text-muted-foreground">{items.length}</span>
+                      {g.label}{" "}
+                      <span className="font-normal text-muted-foreground">{items.length}</span>
                     </SectionTitle>
                     <div className="divide-y divide-border rounded-2xl border border-border bg-card px-2">
                       {items.map((t) => (
@@ -150,7 +172,13 @@ function TasksPage() {
             </div>
           )
         ) : (
-          <MonthCalendar tasks={filtered} tz={tz} tagColor={(n) => tags.find((t) => t.name === n)?.color} onOpen={open} onNew={openNew} />
+          <MonthCalendar
+            tasks={filtered}
+            tz={tz}
+            tagColor={(n) => tags.find((t) => t.name === n)?.color}
+            onOpen={open}
+            onNew={openNew}
+          />
         )}
       </div>
 
@@ -209,22 +237,43 @@ function MonthCalendar({
   return (
     <div className="rounded-2xl border border-border bg-card p-3 md:p-4">
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="font-semibold">{fmt(fromKeys(first, "12:00", tz), tz, { month: "long", year: "numeric" })}</h2>
+        <h2 className="font-semibold">
+          {fmt(fromKeys(first, "12:00", tz), tz, { month: "long", year: "numeric" })}
+        </h2>
         <div className="flex gap-1">
-          <Button variant="ghost" size="icon" className="size-10 rounded-lg" onClick={() => shift(-1)} aria-label="Previous month">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-10 rounded-lg"
+            onClick={() => shift(-1)}
+            aria-label="Previous month"
+          >
             <ChevronLeft />
           </Button>
-          <Button variant="ghost" size="sm" className="h-10 rounded-lg" onClick={() => setMonth(today.slice(0, 7))}>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-10 rounded-lg"
+            onClick={() => setMonth(today.slice(0, 7))}
+          >
             Today
           </Button>
-          <Button variant="ghost" size="icon" className="size-10 rounded-lg" onClick={() => shift(1)} aria-label="Next month">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-10 rounded-lg"
+            onClick={() => shift(1)}
+            aria-label="Next month"
+          >
             <ChevronRight />
           </Button>
         </div>
       </div>
       <div className="grid grid-cols-7 text-center text-[11px] font-medium text-muted-foreground">
         {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => (
-          <div key={d} className="py-2">{d}</div>
+          <div key={d} className="py-2">
+            {d}
+          </div>
         ))}
       </div>
       <div className="grid grid-cols-7 gap-px overflow-hidden rounded-xl bg-border">
@@ -252,11 +301,16 @@ function MonthCalendar({
                     <TagChip
                       name={t.title}
                       color={tagColor(t.tags[0] ?? "") ?? "slate"}
-                      className={cn("w-full truncate rounded-md px-1 text-[10px] md:text-[11px]", t.status === "done" && "line-through opacity-60")}
+                      className={cn(
+                        "w-full truncate rounded-md px-1 text-[10px] md:text-[11px]",
+                        t.status === "done" && "line-through opacity-60",
+                      )}
                     />
                   </button>
                 ))}
-                {items.length > 3 && <p className="px-1 text-[10px] text-muted-foreground">+{items.length - 3} more</p>}
+                {items.length > 3 && (
+                  <p className="px-1 text-[10px] text-muted-foreground">+{items.length - 3} more</p>
+                )}
               </div>
             </div>
           );

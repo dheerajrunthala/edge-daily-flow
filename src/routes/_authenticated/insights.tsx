@@ -13,9 +13,15 @@ export const Route = createFileRoute("/_authenticated/insights")({
   head: () => ({
     meta: [
       { title: "Insights — Daily Edge" },
-      { name: "description", content: "How much reading AI saved you and how you're keeping up with tasks." },
+      {
+        name: "description",
+        content: "How much reading AI saved you and how you're keeping up with tasks.",
+      },
       { property: "og:title", content: "Insights — Daily Edge" },
-      { property: "og:description", content: "How much reading AI saved you and how you're keeping up with tasks." },
+      {
+        property: "og:description",
+        content: "How much reading AI saved you and how you're keeping up with tasks.",
+      },
     ],
   }),
   component: Insights,
@@ -43,20 +49,39 @@ function Insights() {
     }
     return Array.from({ length: 30 }, (_, i) => {
       const k = addDaysKey(today, i - 29);
-      return { day: fmt(fromKeys(k, "12:00", tz), tz, { day: "numeric", month: "short" }), count: counts.get(k) ?? 0 };
+      return {
+        day: fmt(fromKeys(k, "12:00", tz), tz, { day: "numeric", month: "short" }),
+        count: counts.get(k) ?? 0,
+      };
     });
   }, [comps.data, tz]);
 
   const stats = [
-    { icon: Newspaper, label: "Articles scanned", value: scanned.toLocaleString("en-IN"), loading: digests.isLoading },
+    {
+      icon: Newspaper,
+      label: "Articles scanned",
+      value: scanned.toLocaleString("en-IN"),
+      loading: digests.isLoading,
+    },
     {
       icon: Clock,
       label: "Reading time saved",
       value: minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m`,
       loading: digests.isLoading,
     },
-    { icon: Sparkles, label: "Tasks created by AI", value: String(aiTasks), loading: tasks.isLoading, ai: true },
-    { icon: Target, label: "On-time completion", value: rate === null ? "—" : `${rate}%`, loading: comps.isLoading },
+    {
+      icon: Sparkles,
+      label: "Tasks created by AI",
+      value: String(aiTasks),
+      loading: tasks.isLoading,
+      ai: true,
+    },
+    {
+      icon: Target,
+      label: "On-time completion",
+      value: rate === null ? "—" : `${rate}%`,
+      loading: comps.isLoading,
+    },
   ];
 
   return (
@@ -66,7 +91,11 @@ function Insights() {
         {stats.map((s) => (
           <Card key={s.label} ai={s.ai} className="p-5">
             <s.icon className={s.ai ? "size-4 text-ai" : "size-4 text-muted-foreground"} />
-            {s.loading ? <Skeleton className="mt-3 h-8 w-20" /> : <p className="mt-3 text-2xl font-semibold tracking-tight md:text-3xl">{s.value}</p>}
+            {s.loading ? (
+              <Skeleton className="mt-3 h-8 w-20" />
+            ) : (
+              <p className="mt-3 text-2xl font-semibold tracking-tight md:text-3xl">{s.value}</p>
+            )}
             <p className="mt-1 text-xs text-muted-foreground">{s.label}</p>
           </Card>
         ))}
@@ -79,11 +108,29 @@ function Insights() {
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chart} margin={{ left: -24, right: 4 }}>
-                <XAxis dataKey="day" tickLine={false} axisLine={false} fontSize={11} interval={4} stroke="var(--muted-foreground)" />
-                <YAxis allowDecimals={false} tickLine={false} axisLine={false} fontSize={11} stroke="var(--muted-foreground)" />
+                <XAxis
+                  dataKey="day"
+                  tickLine={false}
+                  axisLine={false}
+                  fontSize={11}
+                  interval={4}
+                  stroke="var(--muted-foreground)"
+                />
+                <YAxis
+                  allowDecimals={false}
+                  tickLine={false}
+                  axisLine={false}
+                  fontSize={11}
+                  stroke="var(--muted-foreground)"
+                />
                 <Tooltip
                   cursor={{ fill: "var(--accent)" }}
-                  contentStyle={{ background: "var(--popover)", border: "1px solid var(--border)", borderRadius: 12, fontSize: 12 }}
+                  contentStyle={{
+                    background: "var(--popover)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 12,
+                    fontSize: 12,
+                  }}
                 />
                 <Bar dataKey="count" name="Completed" fill="var(--primary)" radius={[6, 6, 0, 0]} />
               </BarChart>
