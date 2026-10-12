@@ -30,3 +30,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Supabase CLI scratch
+supabase/.temp/
+
+# This repo's lockfile is bun.lock; don't commit a second, diverging lockfile
+package-lock.json
