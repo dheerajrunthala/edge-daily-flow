@@ -255,6 +255,7 @@ export type Database = {
           is_saved: boolean
           published_at: string | null
           rank: number | null
+          read_at: string | null
           related_item_id: string | null
           source: string | null
           summary: string
@@ -274,6 +275,7 @@ export type Database = {
           is_saved?: boolean
           published_at?: string | null
           rank?: number | null
+          read_at?: string | null
           related_item_id?: string | null
           source?: string | null
           summary: string
@@ -293,6 +295,7 @@ export type Database = {
           is_saved?: boolean
           published_at?: string | null
           rank?: number | null
+          read_at?: string | null
           related_item_id?: string | null
           source?: string | null
           summary?: string

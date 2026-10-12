@@ -1,12 +1,21 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Bookmark, Newspaper } from "lucide-react";
+import { Bookmark, Check, ChevronDown, Newspaper } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
 import { AiMark, Card, EmptyState, ListSkeleton, PageHeader } from "@/components/common";
 import { NewsCard } from "@/components/news-card";
 import { ResponsiveModal } from "@/components/responsive-modal";
-import { fetchNewsItem, useDigests, useNewsItems, useSavedItems, useTz } from "@/lib/queries";
+import {
+  fetchNewsItem,
+  useDigests,
+  useMarkRead,
+  useNewsItems,
+  useSavedItems,
+  useTz,
+  type NewsItem,
+} from "@/lib/queries";
+import { loadPref, savePref } from "@/lib/view-prefs";
 import { fmt, fromKeys } from "@/lib/tz";
 import { cn } from "@/lib/utils";
 import {
@@ -32,6 +41,9 @@ export const Route = createFileRoute("/_authenticated/news")({
   component: NewsPage,
 });
 
+/** Collapse state is per category name, so it survives a new digest each morning. */
+const COLLAPSE_KEY = "news.collapsed";
+
 function NewsPage() {
   const tz = useTz();
   const [tab, setTab] = useState<"digest" | "saved">("digest");
@@ -44,6 +56,15 @@ function NewsPage() {
   const { data: items, isLoading: iLoading } = useNewsItems(digestId);
   const saved = useSavedItems();
   const [followId, setFollowId] = useState<string | null>(null);
+  const markRead = useMarkRead();
+  const [collapsed, setCollapsed] = useState<string[]>([]);
+  useEffect(() => setCollapsed(loadPref<string[]>(COLLAPSE_KEY, [])), []);
+  const toggleSection = (cat: string) => {
+    const next = collapsed.includes(cat) ? collapsed.filter((c) => c !== cat) : [...collapsed, cat];
+    setCollapsed(next);
+    savePref(COLLAPSE_KEY, next);
+  };
+  const open = (i: NewsItem) => markRead.mutate({ items: [i], read: true });
 
   const grouped = useMemo(() => {
     const map = new Map<string, NonNullable<typeof items>>();
@@ -120,16 +141,47 @@ function NewsPage() {
             {digest?.status === "failed" && (
               <EmptyState icon={Newspaper}>This digest couldn't be generated.</EmptyState>
             )}
-            {grouped.map(([cat, list]) => (
-              <section key={cat}>
-                <h2 className="mb-3 font-serif text-2xl">{cat}</h2>
-                <div className="grid gap-3 md:grid-cols-2">
-                  {list.map((i) => (
-                    <NewsCard key={i.id} item={i} onFollowUp={setFollowId} />
-                  ))}
-                </div>
-              </section>
-            ))}
+            {grouped.map(([cat, list]) => {
+              const shut = collapsed.includes(cat);
+              const unread = list.filter((i) => !i.read_at).length;
+              return (
+                <section key={cat}>
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <button
+                      onClick={() => toggleSection(cat)}
+                      aria-expanded={!shut}
+                      className="flex min-h-11 items-center gap-2 rounded-lg text-left"
+                    >
+                      <ChevronDown
+                        className={cn(
+                          "size-5 shrink-0 text-muted-foreground transition-transform",
+                          shut && "-rotate-90",
+                        )}
+                      />
+                      <h2 className="font-serif text-2xl">{cat}</h2>
+                      <span className="text-sm tabular-nums text-muted-foreground">
+                        {unread ? `${unread}/${list.length}` : list.length}
+                      </span>
+                    </button>
+                    {unread > 0 && (
+                      <button
+                        onClick={() => markRead.mutate({ items: list, read: true })}
+                        className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-full px-2 text-xs text-muted-foreground transition-calm hover:text-foreground"
+                      >
+                        <Check className="size-3.5" /> Mark read
+                      </button>
+                    )}
+                  </div>
+                  {!shut && (
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {list.map((i) => (
+                        <NewsCard key={i.id} item={i} onFollowUp={setFollowId} onOpen={open} />
+                      ))}
+                    </div>
+                  )}
+                </section>
+              );
+            })}
           </div>
         )
       ) : saved.isLoading ? (
@@ -137,7 +189,7 @@ function NewsPage() {
       ) : saved.data?.length ? (
         <div className="grid gap-3 md:grid-cols-2">
           {saved.data.map((i) => (
-            <NewsCard key={i.id} item={i} onFollowUp={setFollowId} />
+            <NewsCard key={i.id} item={i} onFollowUp={setFollowId} onOpen={open} />
           ))}
         </div>
       ) : (

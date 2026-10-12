@@ -14,8 +14,10 @@ export type Tag = Tables<"tags">;
 export type Digest = Tables<"digests">;
 export type NewsItem = Omit<Tables<"news_items">, "embedding">;
 
+// One literal, not a concatenation: supabase-js infers the row type from the select
+// string, and a `+` turns it back into a plain string and the result into GenericStringError.
 const NEWS_COLS =
-  "id,digest_id,user_id,category,headline,summary,why_it_matters,url,source,published_at,importance,rank,related_item_id,is_saved,created_at";
+  "id,digest_id,user_id,category,headline,summary,why_it_matters,url,source,published_at,importance,rank,related_item_id,is_saved,read_at,url_resolved,created_at";
 
 async function uid() {
   const { data } = await supabase.auth.getUser();
@@ -573,6 +575,46 @@ export function useToggleSaved() {
       return { prev, key };
     },
     onError: (e: Error, _i, ctx) => {
+      if (ctx?.prev) qc.setQueryData(ctx.key, ctx.prev);
+      toast.error(e.message);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ["news_items"] }),
+  });
+}
+
+/**
+ * Mark stories read — one when its link is opened, a whole section from its header.
+ *
+ * Opening the link is the only honest signal the browser has: a card that scrolled past
+ * was not necessarily read. The write is optimistic and deliberately unguarded by a
+ * toast; this is bookkeeping, not an action the user asked for, and it must not steal
+ * attention from the tab they just opened.
+ */
+export function useMarkRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ items, read }: { items: NewsItem[]; read: boolean }) => {
+      const ids = items.filter((i) => !!i.read_at !== read).map((i) => i.id);
+      if (!ids.length) return;
+      const { error } = await supabase
+        .from("news_items")
+        .update({ read_at: read ? new Date().toISOString() : null })
+        .in("id", ids);
+      if (error) throw error;
+    },
+    onMutate: async ({ items, read }) => {
+      const key = qk.items(items[0]?.digest_id);
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<NewsItem[]>(key);
+      const ids = new Set(items.map((i) => i.id));
+      qc.setQueryData<NewsItem[]>(key, (old) =>
+        old?.map((i) =>
+          ids.has(i.id) ? { ...i, read_at: read ? new Date().toISOString() : null } : i,
+        ),
+      );
+      return { prev, key };
+    },
+    onError: (e: Error, _v, ctx) => {
       if (ctx?.prev) qc.setQueryData(ctx.key, ctx.prev);
       toast.error(e.message);
     },

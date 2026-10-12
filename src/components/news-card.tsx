@@ -7,14 +7,25 @@ export function NewsCard({
   item,
   onFollowUp,
   compact,
+  onOpen,
 }: {
   item: NewsItem;
   onFollowUp?: (id: string) => void;
   compact?: boolean;
+  /** Called when the story's link is opened — the only honest "read" signal. */
+  onOpen?: ((item: NewsItem) => void) | undefined;
 }) {
   const toggle = useToggleSaved();
+  const read = !!item.read_at;
   return (
-    <article className="rounded-2xl border border-border bg-card p-5 transition-calm hover:shadow-soft">
+    <article
+      className={cn(
+        "rounded-2xl border border-border bg-card p-5 transition-calm hover:shadow-soft",
+        // Read stories recede rather than disappear: you still want to find the one you
+        // opened this morning, you just don't want it competing with what is new.
+        read && "opacity-55 hover:opacity-100",
+      )}
+    >
       <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
         <span className="font-medium uppercase tracking-wider">{item.category}</span>
         {item.related_item_id && (
@@ -27,7 +38,18 @@ export function NewsCard({
         )}
       </div>
       <h3 className={cn("font-serif leading-snug", compact ? "text-lg" : "text-xl")}>
-        {item.headline}
+        {/* The headline is the link people actually click, so it has to count as a read
+            too — not just the icon in the corner. */}
+        <a
+          href={item.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={() => onOpen?.(item)}
+          onAuxClick={() => onOpen?.(item)}
+          className="rounded transition-calm hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {item.headline}
+        </a>
       </h3>
       {!compact && (
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{item.summary}</p>
@@ -67,6 +89,8 @@ export function NewsCard({
             href={item.url}
             target="_blank"
             rel="noopener noreferrer"
+            onClick={() => onOpen?.(item)}
+            onAuxClick={() => onOpen?.(item)}
             aria-label="Open article"
             className="flex size-10 items-center justify-center rounded-lg text-muted-foreground transition-calm hover:bg-accent hover:text-foreground"
           >
