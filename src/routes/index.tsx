@@ -6,6 +6,7 @@ import {
   BellOff,
   BellRing,
   Bot,
+  Calendar,
   CalendarCheck,
   Check,
   Linkedin,
@@ -222,6 +223,7 @@ const INTEGRATIONS_SOON = [
   { icon: MessageSquare, name: "WhatsApp" },
   { icon: Mic, name: "Amazon Alexa" },
   { icon: Bot, name: "Google Assistant / Gemini" },
+  { icon: Calendar, name: "Google Calendar" },
 ];
 
 const STACK_CHIPS = [
@@ -608,7 +610,7 @@ function Integrations() {
       </div>
 
       <Reveal delay={100} className="mt-6">
-        <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {INTEGRATIONS_SOON.map((it) => (
             <Card key={it.name} className="h-full p-5 opacity-70">
               <div className="flex items-center justify-between">
