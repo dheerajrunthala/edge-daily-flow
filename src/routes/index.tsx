@@ -146,7 +146,7 @@ function ProductMock() {
                     {i === 2 && <Check className="size-3 text-primary-foreground" />}
                   </span>
                   <span className="flex-1 text-sm">{t}</span>
-                  <TagChip name={tag} color={color} />
+                  <TagChip name={tag ?? ""} color={color} />
                   <span className="text-xs text-muted-foreground">{time}</span>
                 </div>
               ))}
