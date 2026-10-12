@@ -1,0 +1,15 @@
+node_modules
+dist
+.output
+.vinxi
+pnpm-lock.yaml
+package-lock.json
+bun.lock
+routeTree.gen.ts
+
+# Lovable/Supabase generated — reformatting these only churns on the next regen
+src/integrations/supabase/types.ts
+src/integrations/supabase/client.ts
+src/integrations/supabase/client.server.ts
+src/integrations/supabase/auth-middleware.ts
+src/integrations/supabase/previewAuthStorage.ts

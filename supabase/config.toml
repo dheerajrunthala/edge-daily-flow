@@ -1,0 +1,36 @@
+project_id = "uhhphhkpxxofspbfynmo"
+# parse-task is only ever called from the browser with the user's session JWT, so the
+# platform check stays on. The handler also verifies the token itself to get the user id.
+[functions.parse-task]
+verify_jwt = true
+
+# ingest-news and build-digests are cron-only. They authenticate with the x-cron-secret
+# header (checked in the handler against CRON_SECRET), so the platform's JWT gate is off:
+# pg_cron -> net.http_post sends no user JWT.
+[functions.ingest-news]
+verify_jwt = false
+
+[functions.build-digests]
+verify_jwt = false
+
+# Both are cron-only and authenticate with x-cron-secret, same as the news pipeline.
+[functions.send-briefs]
+verify_jwt = false
+
+[functions.check-reminders]
+verify_jwt = false
+
+# telegram-webhook is called by Telegram's servers, which send no JWT. It authenticates
+# the request against TELEGRAM_WEBHOOK_SECRET (echoed back in the
+# x-telegram-bot-api-secret-token header) and the user by chat_id, so the platform gate
+# would only block the one caller that is supposed to reach it.
+[functions.telegram-webhook]
+verify_jwt = false
+
+# The MCP server is called by MCP clients (Claude Code, Claude Desktop) carrying a
+# long-lived Daily Edge API token, not a Supabase JWT — the platform gate understands only
+# the latter and would reject every real caller before the handler ran. requireApiToken()
+# in _shared/api-tokens.ts replaces that check: sha256 of the bearer token against
+# api_tokens, then every query scoped to the user id it resolves to.
+[functions.mcp]
+verify_jwt = false
