@@ -284,10 +284,11 @@ ranking prompt:
 - [x] Phase 3: `articles` pool migration, `ingest-news`, `build-digests`, `url_resolved` +
       "via Google News" tag in the news card. Both functions are deployed and have been run
       end to end; **cron is not wired yet** (that migration is Phase 4).
-- [x] Phase 4: `send-briefs` + `check-reminders` + all five cron schedules. Both functions are
-      deployed and run clean end to end **up to the SMTP call** — sending is blocked until
-      `GMAIL_USER` / `GMAIL_APP_PASSWORD` (and `APP_URL`, for the links) are set with
-      `supabase secrets set`. Nothing else is outstanding.
+- [x] Phase 4: `send-briefs` + `check-reminders` + all five cron schedules. Gmail SMTP is
+      live and verified: a real brief was delivered (20 stories, 2 tasks, 5.1s), `brief_sends`
+      linked it to the digest and stamped `digests.emailed_at`, and re-firing the same slot
+      answered "already sent" without a second email. `check-reminders` runs clean but its
+      SMTP path is still unexercised — no task has `remind_before` set yet.
 - [ ] Phase 5: follow-up linking, Insights page with real data, PWA polish
 - [ ] Phase 6 (optional): Telegram bot, weekly review email, "ask my news" chat, X highlights
 
