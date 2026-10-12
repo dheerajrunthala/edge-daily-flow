@@ -8,6 +8,9 @@
 //   due     the moment it is due
 //   nag:k   every nag_interval after that, while it is still open
 //
+// Not every channel carries every rung: email gets `lead` and `due` only, the rest are
+// push-shaped (see EMAIL_STAGES / routeStage below).
+//
 // Each stage fires at most once per occurrence per channel, and that is enforced by rows
 // in task_notifications rather than by timing: the row is claimed *before* the send, so
 // two overlapping ticks cannot both notify, and deleted again if the send fails so the
@@ -57,6 +60,24 @@ const CANDIDATE_LIMIT = 500;
 
 /** Postgres unique violation — a stage another tick already claimed. */
 const UNIQUE_VIOLATION = "23505";
+
+/**
+ * Which stages email is allowed to carry. Email is the channel you read later, so it gets
+ * the two rungs that are still news on a delay — the heads-up you asked for, and the
+ * moment it came due. The in-between rungs and every nag are push-shaped: they are only
+ * useful now, and an inbox full of "still open" is how a reminder app gets muted.
+ */
+const EMAIL_STAGES = new Set(["lead", "due"]);
+
+/**
+ * The channels that will carry one stage, out of the ones the user has enabled and
+ * available right now. Applied before the ledger is claimed, not after, so a stage email
+ * never carries leaves no email row behind — and a user with only email enabled simply
+ * has a shorter ladder (lead and due) rather than stages that silently go nowhere.
+ */
+function routeStage(stage: string, channels: Channel[]): Channel[] {
+  return channels.filter((c) => c !== "email" || EMAIL_STAGES.has(stage));
+}
 
 type Stage = { stage: string; fireAt: number };
 
@@ -254,7 +275,9 @@ async function escalate(
 ): Promise<Outcome | null> {
   if (task.snoozed_until && new Date(task.snoozed_until) > now) return null;
 
-  const stages = plan(task, recipient.prefs.nagIntervalMs, now);
+  const stages = plan(task, recipient.prefs.nagIntervalMs, now).filter(
+    (s) => routeStage(s.stage, channels).length > 0,
+  );
   const pending = pendingStages(task, stages, now);
   if (pending.length === 0) return null;
 
@@ -262,13 +285,13 @@ async function escalate(
   const superseded = pending.slice(0, -1);
 
   for (const old of superseded) {
-    for (const channel of channels) {
+    for (const channel of routeStage(old.stage, channels)) {
       await claim(admin, task, old.stage, channel, false);
     }
   }
 
   const claimed: Channel[] = [];
-  for (const channel of channels) {
+  for (const channel of routeStage(target.stage, channels)) {
     if (await claim(admin, task, target.stage, channel, true)) claimed.push(channel);
   }
   if (claimed.length === 0) {

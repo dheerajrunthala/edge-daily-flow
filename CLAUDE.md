@@ -75,13 +75,21 @@ failing never silences another.
 
 A task that opted into reminders (`remind_before` is set) walks these stages:
 
-| stage   | fires                                         |
-| ------- | --------------------------------------------- |
-| `lead`  | the user's `remind_before`                    |
-| `1h`    | one hour before due                           |
-| `15m`   | fifteen minutes before due                    |
-| `due`   | at `due_at`                                   |
-| `nag:k` | `due_at + k × nag_interval`, while still open |
+| stage   | fires                                         | channels        |
+| ------- | --------------------------------------------- | --------------- |
+| `lead`  | the user's `remind_before`                    | all enabled     |
+| `1h`    | one hour before due                           | telegram / push |
+| `15m`   | fifteen minutes before due                    | telegram / push |
+| `due`   | at `due_at`                                   | all enabled     |
+| `nag:k` | `due_at + k × nag_interval`, while still open | telegram / push |
+
+**Email carries `lead` and `due` only** (`EMAIL_STAGES` / `routeStage()` in check-reminders).
+Email is the channel you read later, so it gets the two rungs that are still news on a
+delay; the in-between rungs and every nag are push-shaped — only useful now, and an inbox
+full of "still open" is how a reminder app gets muted. The filter runs **before** the
+ledger is claimed, not after: a stage email never carries leaves no email row behind, and a
+user whose only channel is email simply has a shorter ladder (`lead` → `due`) rather than
+stages that silently go nowhere.
 
 - **`task_notifications` is the ledger, not the timer.** One row per
   (task, occurrence, stage, channel), claimed _before_ the send and deleted again if the
@@ -398,6 +406,14 @@ ranking prompt:
       into the escalation ladder on a per-minute cron; `telegram-webhook` with linking,
       inline buttons, commands and free-text task capture; Settings UI for channels, quiet
       hours and the nag interval.
+      **Verified in production 2026-10-12:** Telegram linking end to end (`chat_id` bound,
+      one-time code consumed, the `telegram` channel switched on by the webhook); `lead`
+      delivered to email + Telegram at 14:21:04, one tick after its fire time; `15m`
+      delivered to **Telegram only** with no email row written, which is the routing rule
+      holding; the Done button completing a task from the chat. **Not yet exercised:** the
+      `due` and `nag:k` rungs (the test task was completed four minutes before it came
+      due), `1h`, quiet-hours suppression, snooze and Tomorrow, and the free-text →
+      `parse-task` path from a chat.
 - [ ] Phase 6: follow-up linking, Insights page with real data, PWA polish + web push
       (the `push` channel is already in the enum and the UI)
 - [ ] Phase 7 (optional): weekly review email, "ask my news" chat, X highlights
