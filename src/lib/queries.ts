@@ -27,6 +27,7 @@ export const qk = {
   notifyPrefs: ["notification_prefs"] as const,
   telegram: ["telegram_link"] as const,
   pushSubs: ["push_subscriptions"] as const,
+  apiTokens: ["api_tokens"] as const,
   tags: ["tags"] as const,
   tasks: ["tasks"] as const,
   digests: ["digests"] as const,
@@ -122,6 +123,90 @@ export const usePushSubscriptions = () =>
       return data;
     },
   });
+
+/**
+ * The account's MCP API tokens.
+ *
+ * Columns are named explicitly and `token_hash` is deliberately absent — the migration
+ * grants `authenticated` SELECT on these columns only, so `select("*")` would fail. The
+ * hash is of no use to the owner and there is no reason for it to travel to a browser.
+ */
+export const useApiTokens = () =>
+  useQuery({
+    queryKey: qk.apiTokens,
+    queryFn: async () => {
+      const id = await uid();
+      const { data, error } = await supabase
+        .from("api_tokens")
+        .select("id, name, prefix, last_used_at, revoked_at, created_at")
+        .eq("user_id", id)
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return data;
+    },
+  });
+
+export type ApiTokenRow = NonNullable<ReturnType<typeof useApiTokens>["data"]>[number];
+
+/**
+ * Create, revoke and delete tokens.
+ *
+ * `create` returns the plaintext token, which exists in this one response and nowhere
+ * else, ever — it is minted and hashed inside `create_api_token()` and the browser only
+ * ever sees the result. The caller must show it to the user immediately; there is no
+ * second chance and no "reveal" later.
+ *
+ * Revoke and delete are separate on purpose. Revoking stops the token working while
+ * leaving the row (and so the record of what it did) in place; deleting removes it from
+ * the list. Revoking first is the safe order when a token may be in a config file
+ * somewhere you cannot remember.
+ */
+export function useApiTokenActions() {
+  const qc = useQueryClient();
+  const done = () => qc.invalidateQueries({ queryKey: qk.apiTokens });
+  const onError = (e: Error) => toast.error(e.message);
+
+  const create = useMutation({
+    mutationFn: async (name: string) => {
+      const { data, error } = await supabase.rpc("create_api_token", { p_name: name });
+      if (error) throw error;
+      const row = Array.isArray(data) ? data[0] : data;
+      if (!row?.token) throw new Error("Could not create a token");
+      return row as { id: string; token: string; prefix: string; name: string };
+    },
+    onSuccess: done,
+    onError,
+  });
+
+  const revoke = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase
+        .from("api_tokens")
+        .update({ revoked_at: new Date().toISOString() })
+        .eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      done();
+      toast.success("Token revoked");
+    },
+    onError,
+  });
+
+  const remove = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("api_tokens").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      done();
+      toast.success("Token deleted");
+    },
+    onError,
+  });
+
+  return { create, revoke, remove };
+}
 
 export const useTags = () =>
   useQuery({

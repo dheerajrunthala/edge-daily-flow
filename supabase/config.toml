@@ -26,3 +26,11 @@ verify_jwt = false
 # would only block the one caller that is supposed to reach it.
 [functions.telegram-webhook]
 verify_jwt = false
+
+# The MCP server is called by MCP clients (Claude Code, Claude Desktop) carrying a
+# long-lived Daily Edge API token, not a Supabase JWT — the platform gate understands only
+# the latter and would reject every real caller before the handler ran. requireApiToken()
+# in _shared/api-tokens.ts replaces that check: sha256 of the bearer token against
+# api_tokens, then every query scoped to the user id it resolves to.
+[functions.mcp]
+verify_jwt = false

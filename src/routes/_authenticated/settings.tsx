@@ -4,6 +4,7 @@ import { Loader2, LogOut, Monitor, Moon, Sun, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell, useSignOut } from "@/components/app-shell";
 import { Card, ListSkeleton, PageHeader, TagChip } from "@/components/common";
+import { IntegrationsSettings } from "@/components/integrations-settings";
 import { NotificationSettings } from "@/components/notification-settings";
 import { CategoryPicker, EmailTimes, Segmented, TimezoneSelect } from "@/components/pref-controls";
 import { ColorPicker } from "@/components/task-form";
@@ -193,6 +194,12 @@ function SettingsPage() {
               hint={`Where task reminders go, and when to stay quiet. Times are in ${profile.timezone.replace(/_/g, " ")}.`}
             >
               <NotificationSettings />
+            </Section>
+            <Section
+              title="Integrations"
+              hint="Use Daily Edge from Claude Code or Claude Desktop over MCP."
+            >
+              <IntegrationsSettings />
             </Section>
             <Button variant="outline" className="h-11 w-full rounded-xl" onClick={signOut}>
               <LogOut /> Sign out

@@ -44,6 +44,39 @@ export type Database = {
         }
         Relationships: []
       }
+      api_tokens: {
+        Row: {
+          created_at: string
+          id: string
+          last_used_at: string | null
+          name: string
+          prefix: string
+          revoked_at: string | null
+          token_hash: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          last_used_at?: string | null
+          name: string
+          prefix: string
+          revoked_at?: string | null
+          token_hash: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          last_used_at?: string | null
+          name?: string
+          prefix?: string
+          revoked_at?: string | null
+          token_hash?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       articles: {
         Row: {
           category: string
@@ -169,6 +202,47 @@ export type Database = {
         }
         Relationships: []
       }
+      mcp_tool_calls: {
+        Row: {
+          created_at: string
+          duration_ms: number | null
+          error: string | null
+          id: string
+          ok: boolean
+          token_id: string | null
+          tool: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          duration_ms?: number | null
+          error?: string | null
+          id?: string
+          ok: boolean
+          token_id?: string | null
+          tool: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          duration_ms?: number | null
+          error?: string | null
+          id?: string
+          ok?: boolean
+          token_id?: string | null
+          tool?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mcp_tool_calls_token_id_fkey"
+            columns: ["token_id"]
+            isOneToOne: false
+            referencedRelation: "api_tokens"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       news_items: {
         Row: {
           category: string
@@ -275,6 +349,7 @@ export type Database = {
         Row: {
           channels: Database["public"]["Enums"]["notification_channel"][]
           created_at: string
+          morning_time: string
           nag_interval: string
           quiet_end: string
           quiet_start: string
@@ -284,6 +359,7 @@ export type Database = {
         Insert: {
           channels?: Database["public"]["Enums"]["notification_channel"][]
           created_at?: string
+          morning_time?: string
           nag_interval?: string
           quiet_end?: string
           quiet_start?: string
@@ -293,6 +369,7 @@ export type Database = {
         Update: {
           channels?: Database["public"]["Enums"]["notification_channel"][]
           created_at?: string
+          morning_time?: string
           nag_interval?: string
           quiet_end?: string
           quiet_start?: string
@@ -592,6 +669,16 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      create_api_token: {
+        Args: { p_name: string }
+        Returns: {
+          created_at: string
+          id: string
+          name: string
+          prefix: string
+          token: string
+        }[]
+      }
       fanout_ingest_news: { Args: never; Returns: number }
       get_prefetched_feeds: {
         Args: { p_max_age?: string }

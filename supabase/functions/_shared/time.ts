@@ -47,9 +47,18 @@ export function zonedToUtc(
   return new Date(t);
 }
 
-/** "YYYY-MM-DD" for the instant as seen in tz. */
-export function dayKey(date: Date, tz: string): string {
-  const p = partsInTz(date, tz);
+/**
+ * "YYYY-MM-DD" for the instant as seen in tz.
+ *
+ * Takes a string as well as a Date, and must: src/lib/tz.ts has always done
+ * `new Date(date)` here and half the callers on this side pass an ISO timestamp straight
+ * out of Postgres. Without the conversion, Intl's formatToParts coerces the string with
+ * ToNumber, gets NaN, and throws "Invalid time value" — which is exactly what
+ * nextOccurrenceAhead did on its `allDay` branch, i.e. every time an all-day recurring
+ * task (a birthday) was completed from Telegram or a push button.
+ */
+export function dayKey(date: Date | string, tz: string): string {
+  const p = partsInTz(new Date(date), tz);
   return `${p.y}-${String(p.m).padStart(2, "0")}-${String(p.d).padStart(2, "0")}`;
 }
 

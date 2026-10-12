@@ -81,6 +81,33 @@ export function nextOccurrenceAhead(
   return next;
 }
 
+export type TaskGroup = "overdue" | "today" | "upcoming" | "someday";
+
+/**
+ * Which bucket a task belongs in — the same four the /tasks page shows, and the same
+ * rules, because `list_tasks({ filter: "overdue" })` answering differently from the page
+ * the user is looking at would be worse than not offering the filter.
+ *
+ * Mirrors taskGroup() in src/lib/task-logic.ts. Two details that a naive
+ * `due_at < now()` query gets wrong and that are why this is computed in code rather
+ * than in SQL: comparison is by *day* in the user's timezone first, so a task due later
+ * today is "today" and not "upcoming"; and an all-day task due today is never overdue,
+ * because its due_at is local midnight and it has all day to be done.
+ */
+export function taskGroup(
+  task: { due_at: string | null; all_day: boolean },
+  tz: string,
+  now = new Date(),
+): TaskGroup {
+  if (!task.due_at) return "someday";
+  const today = dayKey(now, tz);
+  const k = dayKey(task.due_at, tz);
+  if (k < today) return "overdue";
+  if (k > today) return "upcoming";
+  if (!task.all_day && new Date(task.due_at) < now) return "overdue";
+  return "today";
+}
+
 /**
  * Complete a task. Same two shapes as the web app's useToggleTask: a recurring task logs
  * the occurrence and rolls due_at forward (which also starts a fresh escalation, because
