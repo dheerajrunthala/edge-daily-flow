@@ -35,7 +35,7 @@ export function TaskItem({
     <div className="group flex items-start gap-3 rounded-xl px-2 py-2.5 transition-calm hover:bg-accent/60">
       <button
         onClick={() => onToggle(task)}
-        aria label={done ? "Mark as not done" : "Mark as done"}
+        aria-label={done ? "Mark as not done" : "Mark as done"}
         className="-m-2 flex size-11 shrink-0 items-center justify-center"
       >
         <span
