@@ -37,7 +37,7 @@ React Query for all data fetching, with optimistic updates for task toggles. Sho
 
 This project was built with [Lovable](https://lovable.dev).
 
-**Live app**: https://edge-daily-flow.lovable.app
+**Live app**: https://dailyedgeapp.lovable.app
 
 ## Build with Lovable
 
