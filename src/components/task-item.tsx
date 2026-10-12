@@ -27,7 +27,7 @@ export function TaskItem({
   tags: Tag[];
   onToggle: (t: Task) => void;
   onOpen?: (t: Task) => void;
-  overdue?: boolean;
+  overdue?: boolean | undefined;
 }) {
   const done = task.status === "done";
   const color = (n: string) => tags.find((t) => t.name === n)?.color;

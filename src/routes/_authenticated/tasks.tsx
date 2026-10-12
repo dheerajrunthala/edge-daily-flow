@@ -187,7 +187,7 @@ function MonthCalendar({
 }) {
   const today = dayKey(new Date(), tz);
   const [month, setMonth] = useState(today.slice(0, 7)); // YYYY-MM
-  const [y, m] = month.split("-").map(Number);
+  const [y = 2026, m = 1] = month.split("-").map(Number);
   const first = `${month}-01`;
   const startDow = (new Date(Date.UTC(y, m - 1, 1)).getUTCDay() + 6) % 7; // Monday first
   const gridStart = addDaysKey(first, -startDow);

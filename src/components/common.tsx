@@ -30,7 +30,7 @@ export function AiMark({ className }: { className?: string }) {
   return <Sparkles className={cn("size-3.5 text-ai", className)} aria-label="AI generated" />;
 }
 
-export function Card({ className, children, ai }: { className?: string; children: ReactNode; ai?: boolean }) {
+export function Card({ className, children, ai }: { className?: string; children: ReactNode; ai?: boolean | undefined }) {
   return (
     <div
       className={cn(
@@ -52,7 +52,7 @@ export function SectionTitle({
 }: {
   children: ReactNode;
   icon?: LucideIcon;
-  tone?: "overdue" | "ai";
+  tone?: "overdue" | "ai" | undefined;
   action?: ReactNode;
 }) {
   return (

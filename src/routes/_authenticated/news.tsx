@@ -29,7 +29,7 @@ function NewsPage() {
   const { data: digests, isLoading } = useDigests();
   const [digestId, setDigestId] = useState<string>();
   useEffect(() => {
-    if (!digestId && digests?.length) setDigestId(digests[0].id);
+    if (!digestId && digests?.length) setDigestId(digests[0]!.id);
   }, [digests, digestId]);
   const digest = digests?.find((d) => d.id === digestId);
   const { data: items, isLoading: iLoading } = useNewsItems(digestId);
@@ -50,7 +50,7 @@ function NewsPage() {
         title="News"
         action={
           tab === "digest" && digests && digests.length > 0 ? (
-            <Select value={digestId} onValueChange={setDigestId}>
+            <Select value={digestId ?? ""} onValueChange={setDigestId}>
               <SelectTrigger className="h-10 w-56 rounded-xl"><SelectValue placeholder="Pick a date" /></SelectTrigger>
               <SelectContent>
                 {digests.map((d) => (
