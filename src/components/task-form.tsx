@@ -15,7 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export type TaskDraft = {
-  id?: string;
+  id?: string | undefined;
   title: string;
   notes: string;
   date: string;
@@ -104,7 +104,7 @@ export function TaskFields({ draft, set }: { draft: TaskDraft; set: (d: TaskDraf
             <SelectTrigger className="h-11 rounded-xl"><SelectValue /></SelectTrigger>
             <SelectContent>
               {["none", "daily", "weekly", "monthly", "yearly"].map((r) => (
-                <SelectItem key={r} value={r}>{r === "none" ? "Doesn't repeat" : r[0].toUpperCase() + r.slice(1)}</SelectItem>
+                <SelectItem key={r} value={r}>{r === "none" ? "Doesn't repeat" : r.charAt(0).toUpperCase() + r.slice(1)}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -135,7 +135,7 @@ export function TaskFields({ draft, set }: { draft: TaskDraft; set: (d: TaskDraf
       <div className="space-y-2">
         <Label>Tags</Label>
         <div className="flex flex-wrap gap-2">
-          {tags.map((t) => {
+          {tags.map((t: { id: string; name: string; color: string }) => {
             const on = draft.tags.includes(t.name);
             return (
               <button
@@ -225,7 +225,7 @@ export function TaskDialog({
         onSubmit={async (e) => {
           e.preventDefault();
           if (!draft.title.trim()) return;
-          await save.mutateAsync({ ...draftToRow(draft, tz), id: draft.id });
+          await save.mutateAsync(draft.id ? { ...draftToRow(draft, tz), id: draft.id } : draftToRow(draft, tz));
           onOpenChange(false);
         }}
       >

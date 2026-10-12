@@ -12,7 +12,7 @@ export function Logo({ className }: { className?: string }) {
   );
 }
 
-export function TagChip({ name, color, className }: { name: string; color?: string; className?: string }) {
+export function TagChip({ name, color, className }: { name: string; color?: string | undefined; className?: string | undefined }) {
   return (
     <span
       className={cn(

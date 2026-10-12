@@ -34,7 +34,8 @@ export function partsInTz(date: Date, tz: string): Parts {
   });
   const p: Record<string, string> = {};
   for (const x of f.formatToParts(date)) p[x.type] = x.value;
-  return { y: +p.year, m: +p.month, d: +p.day, h: +p.hour % 24, min: +p.minute, s: +p.second };
+  const n = (k: string) => Number(p[k] ?? 0);
+  return { y: n("year"), m: n("month"), d: n("day"), h: n("hour") % 24, min: n("minute"), s: n("second") };
 }
 
 function offsetMs(date: Date, tz: string) {
@@ -62,13 +63,13 @@ export function timeKey(date: Date | string, tz: string): string {
 }
 
 export function fromKeys(day: string, time: string, tz: string): Date {
-  const [y, m, d] = day.split("-").map(Number);
-  const [h, min] = time.split(":").map(Number);
+  const [y = 1970, m = 1, d = 1] = day.split("-").map(Number);
+  const [h = 0, min = 0] = time.split(":").map(Number);
   return zonedToUtc(y, m, d, h || 0, min || 0, tz);
 }
 
 export function addDaysKey(day: string, n: number): string {
-  const [y, m, d] = day.split("-").map(Number);
+  const [y = 1970, m = 1, d = 1] = day.split("-").map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d + n));
   return dt.toISOString().slice(0, 10);
 }

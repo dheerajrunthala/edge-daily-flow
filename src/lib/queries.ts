@@ -295,7 +295,7 @@ export function useTagMutations() {
         for (const r of rows ?? []) {
           await supabase
             .from("tasks")
-            .update({ tags: r.tags.map((x) => (x === tag.name ? name : x)) })
+            .update({ tags: r.tags.map((x: string) => (x === tag.name ? name : x)) })
             .eq("id", r.id);
         }
       }
@@ -309,7 +309,7 @@ export function useTagMutations() {
       if (error) throw error;
       const { data: rows } = await supabase.from("tasks").select("id,tags").contains("tags", [tag.name]);
       for (const r of rows ?? []) {
-        await supabase.from("tasks").update({ tags: r.tags.filter((x) => x !== tag.name) }).eq("id", r.id);
+        await supabase.from("tasks").update({ tags: r.tags.filter((x: string) => x !== tag.name) }).eq("id", r.id);
       }
     },
     onSuccess: done,
