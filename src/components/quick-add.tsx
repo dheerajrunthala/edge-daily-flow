@@ -91,9 +91,14 @@ export const QuickAdd = forwardRef<HTMLInputElement, { tz: string }>(function Qu
           className="h-12 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
         />
         <kbd className="hidden rounded-md border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground md:inline">
-          ⌘K
+          ⌘I
         </kbd>
-        <Button type="submit" size="sm" className="rounded-lg" disabled={loading || !text.trim()}>
+        <Button
+          type="submit"
+          size="sm"
+          className="h-11 rounded-lg md:h-9"
+          disabled={loading || !text.trim()}
+        >
           {loading ? <Loader2 className="animate-spin" /> : "Add"}
         </Button>
       </form>

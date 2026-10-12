@@ -1,6 +1,8 @@
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import type { Enums, Tables, TablesInsert, TablesUpdate } from "@/integrations/supabase/types";
+import { qk } from "./query-keys";
+import { completeOne, reopenOne, restoreTasks, uncompleteOne } from "./task-actions";
 import { nextOccurrenceAhead, type Task } from "./task-logic";
 import { toast } from "sonner";
 
@@ -21,20 +23,7 @@ async function uid() {
   return data.user.id;
 }
 
-export const qk = {
-  profile: ["profile"] as const,
-  prefs: ["prefs"] as const,
-  notifyPrefs: ["notification_prefs"] as const,
-  telegram: ["telegram_link"] as const,
-  pushSubs: ["push_subscriptions"] as const,
-  apiTokens: ["api_tokens"] as const,
-  tags: ["tags"] as const,
-  tasks: ["tasks"] as const,
-  digests: ["digests"] as const,
-  items: (digestId: string | undefined) => ["news_items", digestId] as const,
-  saved: ["news_items", "saved"] as const,
-  completions: ["completions"] as const,
-};
+export { qk } from "./query-keys";
 
 export const profileQuery = () =>
   queryOptions({
@@ -415,67 +404,55 @@ export function useInsertTasks() {
   });
 }
 
+/**
+ * Delete a task, keeping a copy so the toast can offer Undo. The row is read back from
+ * the database rather than taken from the cache, so a restore puts back what was really
+ * there; it is re-inserted with its original id.
+ */
 export function useDeleteTask() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
+      const { data: before } = await supabase.from("tasks").select("*").eq("id", id).maybeSingle();
       const { error } = await supabase.from("tasks").delete().eq("id", id);
       if (error) throw error;
+      return before;
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.tasks }),
+    onSuccess: (before) => {
+      qc.invalidateQueries({ queryKey: qk.tasks });
+      if (!before) return;
+      toast.success("Task deleted", {
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              await restoreTasks([before]);
+            } catch (e) {
+              toast.error((e as Error).message);
+            }
+            qc.invalidateQueries({ queryKey: qk.tasks });
+          },
+        },
+      });
+    },
     onError: (e: Error) => toast.error(e.message),
   });
 }
 
-/** Toggle a task with optimistic update. Recurring tasks log a completion and roll forward. */
+/**
+ * Toggle a task from a checkbox, optimistically, with an undo.
+ *
+ * The write itself lives in `task-actions.ts` so the swipe, the long-press menu, the
+ * bulk bar and this checkbox all complete a task the same way — including the
+ * roll-forward of a recurring one. What this adds is the optimistic repaint (the tick
+ * has to land under the finger, not after a round trip) and the undo toast, because a
+ * mis-tap on a recurring task has already moved its due date.
+ */
 export function useToggleTask(tz: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (task: Task) => {
-      if (task.status === "done") {
-        const { error } = await supabase
-          .from("tasks")
-          .update({ status: "todo", completed_at: null, snoozed_until: null })
-          .eq("id", task.id);
-        if (error) throw error;
-        // Drop the logged completion too, or Insights keeps counting a task that is open again.
-        const { error: delErr } = await supabase
-          .from("task_completions")
-          .delete()
-          .eq("task_id", task.id);
-        if (delErr) throw delErr;
-        return;
-      }
-      if (task.recurrence !== "none" && task.due_at) {
-        const { error: e1 } = await supabase
-          .from("task_completions")
-          .insert({ task_id: task.id, due_at: task.due_at });
-        if (e1) throw e1;
-        const { error: e2 } = await supabase
-          .from("tasks")
-          .update({
-            due_at: nextOccurrenceAhead(task.due_at, task.recurrence, tz, task.all_day),
-            // The next occurrence starts a fresh escalation, so neither the old reminder
-            // stamp nor a snooze aimed at the occurrence just completed should carry over.
-            last_reminded_at: null,
-            snoozed_until: null,
-          })
-          .eq("id", task.id);
-        if (e2) throw e2;
-        return;
-      }
-      const now = new Date().toISOString();
-      const { error } = await supabase
-        .from("tasks")
-        .update({ status: "done", completed_at: now })
-        .eq("id", task.id);
-      if (error) throw error;
-      // Log one-off completions too, so insights reflect them
-      const { error: logErr } = await supabase
-        .from("task_completions")
-        .insert({ task_id: task.id, due_at: task.due_at, completed_at: now });
-      if (logErr) throw logErr;
-    },
+    mutationFn: async (task: Task) =>
+      task.status === "done" ? reopenOne(task) : completeOne(task, tz),
     onMutate: async (task) => {
       await qc.cancelQueries({ queryKey: qk.tasks });
       const prev = qc.getQueryData<Task[]>(qk.tasks);
@@ -495,8 +472,21 @@ export function useToggleTask(tz: string) {
       toast.error(e.message);
     },
     onSuccess: (_d, task) => {
-      if (task.recurrence !== "none" && task.status !== "done")
-        toast.success("Done — next one scheduled");
+      if (task.status === "done") return; // reopening is its own undo
+      toast.success(task.recurrence !== "none" ? "Done — next one scheduled" : "Task completed", {
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              await uncompleteOne(task);
+            } catch (e) {
+              toast.error((e as Error).message);
+            }
+            qc.invalidateQueries({ queryKey: qk.tasks });
+            qc.invalidateQueries({ queryKey: qk.completions });
+          },
+        },
+      });
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: qk.tasks });

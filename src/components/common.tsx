@@ -2,6 +2,7 @@ import { Sparkles, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
 
 export function Logo({ className }: { className?: string }) {
   return (
@@ -16,10 +17,13 @@ export function TagChip({
   name,
   color,
   className,
+  children,
 }: {
   name: string;
   color?: string | undefined;
   className?: string | undefined;
+  /** Trailing content inside the chip — a count, a tick on a filter chip. */
+  children?: ReactNode;
 }) {
   return (
     <span
@@ -30,6 +34,7 @@ export function TagChip({
       )}
     >
       {name}
+      {children}
     </span>
   );
 }
@@ -88,13 +93,30 @@ export function SectionTitle({
   );
 }
 
-export function EmptyState({ icon: Icon, children }: { icon: LucideIcon; children: ReactNode }) {
+/**
+ * An empty state without a way out is just a shrug, so `action` is part of the shape
+ * rather than something each caller remembers to add.
+ */
+export function EmptyState({
+  icon: Icon,
+  children,
+  action,
+}: {
+  icon: LucideIcon;
+  children: ReactNode;
+  action?: { label: string; onClick: () => void } | undefined;
+}) {
   return (
     <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-border px-6 py-10 text-center">
       <div className="flex size-10 items-center justify-center rounded-full bg-muted">
         <Icon className="size-5 text-muted-foreground" />
       </div>
       <p className="max-w-xs text-sm text-muted-foreground">{children}</p>
+      {action && (
+        <Button variant="outline" className="h-10 rounded-xl" onClick={action.onClick}>
+          {action.label}
+        </Button>
+      )}
     </div>
   );
 }

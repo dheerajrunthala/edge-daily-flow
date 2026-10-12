@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { nextOccurrence, nextOccurrenceAhead, onTimeRate, taskGroup } from "./task-logic";
+import {
+  displayGroup,
+  matchesSearch,
+  nextOccurrence,
+  nextOccurrenceAhead,
+  onTimeRate,
+  repoContextLine,
+  sortTasks,
+  taskGroup,
+  type Task,
+} from "./task-logic";
 
 const TZ = "Asia/Kolkata";
 
@@ -94,5 +104,97 @@ describe("on-time rate", () => {
         { due_at: "2026-10-12T10:00:00Z", completed_at: "2026-10-12T11:00:00Z" },
       ]),
     ).toBe(50);
+  });
+});
+
+// A fixture with only the fields the helpers under test look at.
+function task(p: Partial<Task> = {}): Task {
+  return {
+    id: p.id ?? crypto.randomUUID(),
+    user_id: "u",
+    title: "x",
+    notes: null,
+    due_at: null,
+    all_day: false,
+    recurrence: "none",
+    priority: "medium",
+    status: "todo",
+    tags: [],
+    remind_before: null,
+    last_reminded_at: null,
+    snoozed_until: null,
+    completed_at: null,
+    source: "manual",
+    created_at: "2026-10-01T00:00:00.000Z",
+    updated_at: "2026-10-01T00:00:00.000Z",
+    ...p,
+  } as Task;
+}
+
+describe("sortTasks", () => {
+  it("puts high priority first and keeps someday last", () => {
+    const a = task({ title: "a", priority: "low", due_at: "2026-10-12T00:00:00.000Z" });
+    const b = task({ title: "b", priority: "high", due_at: "2026-10-14T00:00:00.000Z" });
+    const c = task({ title: "c", priority: "medium", due_at: null });
+    expect(sortTasks([a, b, c], "priority").map((t) => t.title)).toEqual(["b", "c", "a"]);
+    expect(sortTasks([c, a, b], "due").map((t) => t.title)).toEqual(["a", "b", "c"]);
+  });
+  it("A–Z is case-insensitive", () => {
+    const list = [task({ title: "beta" }), task({ title: "Alpha" })];
+    expect(sortTasks(list, "alpha").map((t) => t.title)).toEqual(["Alpha", "beta"]);
+  });
+  it("recently created and recently updated are newest first", () => {
+    const old = task({
+      title: "old",
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-05-01T00:00:00.000Z",
+    });
+    const fresh = task({
+      title: "fresh",
+      created_at: "2026-09-01T00:00:00.000Z",
+      updated_at: "2026-02-01T00:00:00.000Z",
+    });
+    expect(sortTasks([old, fresh], "created").map((t) => t.title)).toEqual(["fresh", "old"]);
+    expect(sortTasks([fresh, old], "updated").map((t) => t.title)).toEqual(["old", "fresh"]);
+  });
+  it("does not mutate its input", () => {
+    const list = [task({ title: "b" }), task({ title: "a" })];
+    const copy = [...list];
+    sortTasks(list, "alpha");
+    expect(list).toEqual(copy);
+  });
+});
+
+describe("matchesSearch", () => {
+  const t = task({ title: "Fix auth redirect", notes: "Repo: edge-daily-flow", tags: ["Coding"] });
+  it("matches title, notes and tags, case-insensitively", () => {
+    expect(matchesSearch(t, "AUTH")).toBe(true);
+    expect(matchesSearch(t, "edge-daily")).toBe(true);
+    expect(matchesSearch(t, "coding")).toBe(true);
+    expect(matchesSearch(t, "news")).toBe(false);
+  });
+  it("an empty query matches everything", () => {
+    expect(matchesSearch(t, "   ")).toBe(true);
+  });
+});
+
+describe("repoContextLine", () => {
+  it("prefers the Next: line over the other labels", () => {
+    const notes = "Project: edge-daily-flow\nBranch: main\nNext: wire the cron";
+    expect(repoContextLine(notes)).toBe("Next: wire the cron");
+  });
+  it("falls back to the first labelled line", () => {
+    expect(repoContextLine("Repo: foo\nsomething else")).toBe("Repo: foo");
+  });
+  it("leaves freeform notes alone", () => {
+    expect(repoContextLine("remember to call the plumber")).toBeNull();
+    expect(repoContextLine(null)).toBeNull();
+  });
+});
+
+describe("displayGroup", () => {
+  it("files a completed task under done however overdue it was", () => {
+    const t = task({ status: "done", due_at: "2026-10-01T00:00:00.000Z" });
+    expect(displayGroup(t, TZ, new Date("2026-10-12T06:00:00.000Z"))).toBe("done");
   });
 });

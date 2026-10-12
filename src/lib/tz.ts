@@ -117,3 +117,51 @@ export function greeting(tz: string) {
   if (h < 17) return "Good afternoon";
   return "Good evening";
 }
+
+/**
+ * "in 2h", "overdue 1d" — the shape a task row wants.
+ *
+ * Deliberately not Intl.RelativeTimeFormat: that renders "in 2 hours" / "2 hours ago",
+ * which is both longer and the wrong register for a list of twenty rows, and it has no
+ * way to say "overdue". The absolute time goes in the tooltip, so this can be terse.
+ *
+ * All-day tasks are compared by day, never by clock: a birthday today is "today", not
+ * "overdue 9h" because its due_at is local midnight.
+ */
+export function relativeDue(dueAt: string, tz: string, allDay = false, now = new Date()): string {
+  if (allDay) {
+    const k = dayKey(dueAt, tz);
+    const today = dayKey(now, tz);
+    if (k === today) return "today";
+    const days = Math.round(
+      (Date.parse(`${k}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400000,
+    );
+    if (days === 1) return "tomorrow";
+    if (days === -1) return "overdue 1d";
+    return days > 0 ? `in ${days}d` : `overdue ${-days}d`;
+  }
+  const diff = new Date(dueAt).getTime() - now.getTime();
+  const ahead = diff >= 0;
+  const mins = Math.round(Math.abs(diff) / 60000);
+  const unit =
+    mins < 1
+      ? "now"
+      : mins < 60
+        ? `${mins}m`
+        : mins < 1440
+          ? `${Math.round(mins / 60)}h`
+          : `${Math.round(mins / 1440)}d`;
+  if (unit === "now") return ahead ? "now" : "just now";
+  return ahead ? `in ${unit}` : `overdue ${unit}`;
+}
+
+/** The long form, for a tooltip or an aria-label. */
+export function absoluteDue(dueAt: string, tz: string, allDay = false) {
+  return fmt(dueAt, tz, {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    ...(allDay ? {} : { hour: "numeric", minute: "2-digit" }),
+  });
+}

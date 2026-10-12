@@ -274,7 +274,9 @@ async function createFromText(
     return;
   }
 
-  const rows = parsed.tasks.map((t) => ({ ...t, user_id: user.userId, source: "ai" }));
+  // source "telegram", not "ai": the parse was Gemini's either way, but nobody saw a
+  // preview before this saved, and the Tasks page lets the user filter on that.
+  const rows = parsed.tasks.map((t) => ({ ...t, user_id: user.userId, source: "telegram" }));
   const { data, error } = await admin
     .from("tasks")
     .insert(rows)

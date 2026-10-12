@@ -40,6 +40,7 @@
   --color-overdue: var(--overdue);
   --color-overdue-soft: var(--overdue-soft);
   --color-success: var(--success);
+  --color-warn: var(--warn);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -82,6 +83,7 @@
   --overdue: oklch(0.586 0.222 17.585);
   --overdue-soft: oklch(0.969 0.015 12.422);
   --success: oklch(0.6 0.15 155);
+  --warn: oklch(0.7 0.16 70);
   --chart-1: oklch(0.585 0.233 277.117);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
@@ -126,6 +128,7 @@
   --overdue: oklch(0.712 0.194 13.428);
   --overdue-soft: oklch(0.645 0.246 16.439 / 0.12);
   --success: oklch(0.72 0.15 155);
+  --warn: oklch(0.78 0.15 75);
   --sidebar: oklch(0.16 0.006 285.8);
   --sidebar-foreground: oklch(0.96 0.002 286);
   --sidebar-primary: oklch(0.673 0.182 276.935);
@@ -174,6 +177,21 @@
   padding-bottom: max(env(safe-area-inset-bottom), 0px);
 }
 
+/* Horizontal chip rows scroll on narrow screens; the bar itself would steal 15px of
+   height on every one of them. */
+@utility scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Fade the right edge of a scrollable row so there is a hint that it continues. */
+@utility edge-fade {
+  mask-image: linear-gradient(to right, transparent 0, black 12px, black calc(100% - 20px), transparent 100%);
+}
+
 @utility transition-calm {
   transition-property: color, background-color, border-color, opacity, transform, box-shadow;
   transition-duration: 180ms;
@@ -200,4 +218,35 @@
   .tag-cyan { --tag: oklch(0.65 0.12 215); }
   .tag-orange { --tag: oklch(0.66 0.19 45); }
   .tag-dot { background-color: var(--tag); }
+}
+
+/* Landing page: fade sections up on first scroll into view; a visible no-op under
+   reduced motion rather than content that depends on JS to ever appear. */
+.reveal {
+  opacity: 1;
+  transform: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .reveal {
+    opacity: 0;
+    transform: translateY(20px);
+    transition: opacity 0.7s cubic-bezier(0.2, 0, 0, 1), transform 0.7s cubic-bezier(0.2, 0, 0, 1);
+  }
+  .reveal.is-visible {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes landing-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+.landing-float {
+  animation: landing-float 6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .landing-float {
+    animation: none;
+  }
 }
