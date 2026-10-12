@@ -602,8 +602,9 @@ ranking prompt:
   i.e. every time an **all-day recurring task (a birthday)** was completed from Telegram or a push
   button. Fixed 2026-10-12 with a regression test in `_shared/time.test.ts`; the vitest `include`
   was widened to cover `_shared/*.test.ts`, which works only because time.ts has no `npm:`/`jsr:`
-  imports. **`telegram-webhook` and `push-action` still carry the old copy until they are
-  redeployed.**
+  imports. Every function that bundles time.ts was redeployed from the fixed commit and
+  verified byte-identical to the repo; the roll-forward of an all-day yearly task was then
+  re-run end to end against the live runtime.
 - Anything mirrored between `src/lib/` and `_shared/` can drift exactly like that. When touching
   one, check the other: `tz.ts`↔`time.ts`, `task-logic.ts`↔`tasks.ts`.
 
