@@ -5,13 +5,20 @@
 // recorded in DROPPED below rather than silently deleted, so we don't re-add them.
 
 /** Mirrors CATEGORIES in src/lib/queries.ts. news_prefs.categories holds these strings. */
-export type NewsCategory =
-  | "AI"
-  | "Software Development"
-  | "Indian Stock Market"
-  | "Indian Startups & Tech"
-  | "Global Tech"
-  | "Policy & Regulation";
+export const NEWS_CATEGORIES = [
+  "AI",
+  "Software Development",
+  "Indian Stock Market",
+  "Indian Startups & Tech",
+  "Global Tech",
+  "Policy & Regulation",
+] as const;
+
+export type NewsCategory = (typeof NEWS_CATEGORIES)[number];
+
+export function isNewsCategory(v: unknown): v is NewsCategory {
+  return typeof v === "string" && (NEWS_CATEGORIES as readonly string[]).includes(v);
+}
 
 /**
  * How much the source itself vouches for a story.
@@ -85,9 +92,31 @@ export const FEEDS: Feed[] = [
     category: "AI",
     tier: "trusted",
   },
+  // Added because the AI category was starving: the three lab blogs post every few days,
+  // so without a daily newsroom feed a quiet day left only a handful of candidates.
+  {
+    url: "https://techcrunch.com/category/artificial-intelligence/feed/",
+    name: "TechCrunch AI",
+    category: "AI",
+    tier: "trusted",
+  },
+  {
+    url: "https://the-decoder.com/feed/",
+    name: "The Decoder",
+    category: "AI",
+    tier: "trusted",
+  },
   {
     url: gnews('"artificial intelligence" when:1d'),
     name: "Google News (AI)",
+    category: "AI",
+    tier: "aggregator",
+  },
+  // hnrss supports a search query as well as a points floor, which gives a second
+  // aggregator for AI that is reachable without the Google News prefetch.
+  {
+    url: "https://hnrss.org/newest?q=AI+OR+LLM&points=50",
+    name: "Hacker News (AI)",
     category: "AI",
     tier: "aggregator",
   },
@@ -284,6 +313,16 @@ export const DROPPED: { url: string; reason: string }[] = [
     reason:
       "Moneycontrol: feed is abandoned — newest item is 23 Apr 2024. Same for " +
       "MCtopnews.xml and latestnews.xml. Was in the original plan; removed.",
+  },
+  {
+    url: "https://venturebeat.com/category/ai/feed/",
+    reason:
+      "VentureBeat: HTTP 429 on every attempt and every path (/category/ai/feed/, /ai/feed/, " +
+      "/feed/), spaced out. A block, not rate limiting we can wait out.",
+  },
+  {
+    url: "https://feeds.arstechnica.com/arstechnica/ai",
+    reason: "No such Ars Technica AI feed (404). The main Ars feed covers it.",
   },
   {
     url: "https://www.anthropic.com/news/rss.xml",
@@ -539,6 +578,69 @@ export async function resolveItemUrl(item: FeedItem): Promise<FeedItem> {
     // Ignore — resolution is a nicety, not a requirement.
   }
   return item;
+}
+
+// ------------------------------------------------------- excerpt enrichment
+
+/**
+ * Below this, a feed excerpt is not worth summarizing from and we go to the page.
+ * A headline is typically 60-110 characters, so this is roughly "less than a sentence".
+ */
+export const THIN_EXCERPT_CHARS = 120;
+
+/**
+ * And below this, a *fetched* excerpt is site boilerplate rather than a description.
+ * Measured against real pages: Hugging Face serves "A Blog post by Ai2 on Hugging Face"
+ * (34 chars) and RBI serves "Press Releases - Reserve Bank of India" (38) for every
+ * article, while OpenAI and GitHub releases give 110+ characters of actual summary.
+ */
+const MIN_FETCHED_EXCERPT_CHARS = 60;
+
+const EXCERPT_PATTERNS = [
+  /<meta[^>]+property=["']og:description["'][^>]*content=["']([^"']{20,})["']/i,
+  /<meta[^>]+content=["']([^"']{20,})["'][^>]*property=["']og:description["']/i,
+  /<meta[^>]+name=["']description["'][^>]*content=["']([^"']{20,})["']/i,
+  /<meta[^>]+content=["']([^"']{20,})["'][^>]*name=["']description["']/i,
+  /<meta[^>]+name=["']twitter:description["'][^>]*content=["']([^"']{20,})["']/i,
+];
+
+/** Only this much of the page is scanned — the meta tags live in <head>. */
+const EXCERPT_MAX_BYTES = 200_000;
+
+/**
+ * Fetch an article page and pull its og:description (or meta description) out, for items
+ * whose feed gave no usable excerpt. Returns null rather than throwing: an article with a
+ * thin excerpt is still worth pooling.
+ */
+export async function fetchExcerpt(item: FeedItem): Promise<string | null> {
+  // An unresolved Google News link serves Google's own shell page, whose description
+  // describes Google News. Never enrich from one.
+  if (!item.resolved || isGoogleNewsLink(item.url)) return null;
+
+  try {
+    const res = await fetch(item.url, {
+      headers: { ...FETCH_HEADERS, accept: "text/html,application/xhtml+xml" },
+      redirect: "follow",
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return null;
+    // SEBI links straight to PDFs, and several feeds link to images or feeds.
+    if (!(res.headers.get("content-type") ?? "").includes("text/html")) {
+      await res.body?.cancel();
+      return null;
+    }
+
+    const html = (await res.text()).slice(0, EXCERPT_MAX_BYTES);
+    for (const re of EXCERPT_PATTERNS) {
+      const hit = html.match(re);
+      if (!hit) continue;
+      const text = stripHtml(decodeXml(hit[1])).trim();
+      if (text.length >= MIN_FETCHED_EXCERPT_CHARS) return text.slice(0, 1200);
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 // ------------------------------------------------------------ junk filtering

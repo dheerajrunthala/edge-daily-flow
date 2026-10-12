@@ -12,3 +12,10 @@ verify_jwt = false
 
 [functions.build-digests]
 verify_jwt = false
+
+# Both are cron-only and authenticate with x-cron-secret, same as the news pipeline.
+[functions.send-briefs]
+verify_jwt = false
+
+[functions.check-reminders]
+verify_jwt = false

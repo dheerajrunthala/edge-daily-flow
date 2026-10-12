@@ -74,6 +74,10 @@ require a valid user JWT. The browser never calls Gemini.
   source_count, published_at, summary, embedding vector(768), url_resolved, fetched_on).
   RLS: authenticated read only; the service role writes. `url` is unique across all time, so an
   article is summarized and embedded exactly once, ever.
+- `brief_sends` (user_id, sent_for date, slot 'HH:MM', digest_id, unique on the first three)
+  — the idempotency record for send-briefs. Owner-readable.
+- `prefetch_feeds` / `prefetch_requests` — plumbing for the Google News workaround below.
+  RLS on with **no policies**: service role and SECURITY DEFINER functions only.
 - `ai_events` (user_id, kind, items_processed, tokens) → Insights page + rate limiting.
   `user_id` is **nullable**: ingest-news is shared work with no owning user, and a null row
   matches no RLS policy, so it stays out of every user's view and rate limit.
@@ -102,47 +106,89 @@ Never run the full Gemini pipeline per user. Built in Phase 3 and live:
    with the page's own signature and timestamp (all three verified against live links 2026-10-12).
    Those items keep the Google link with `resolved: false`; the link still works in a browser, and
    step 4 prefers a direct feed's URL for the same story whenever one exists. Re-test occasionally.
-3. **Filter junk** (`isJunk`) — sponsored/brand-post/advertorial, plus the stock-tip genre that
+3. **Enrich thin excerpts** (`fetchExcerpt`) — several feeds ship a headline and nothing else
+   (Hugging Face, the GitHub release feeds, RBI). Below `THIN_EXCERPT_CHARS` the article page is
+   fetched and its `og:description` / meta description used instead. Guards that matter: skip
+   unresolved Google News links (their page describes Google News), skip non-`text/html` (SEBI
+   links straight to PDFs), and require 60+ characters because Hugging Face serves "A Blog post
+   by Ai2 on Hugging Face" and RBI "Press Releases - Reserve Bank of India" for every article.
+4. **Filter junk** (`isJunk`) — sponsored/brand-post/advertorial, plus the stock-tip genre that
    floods the Indian market feeds (multibagger, "top 5 stocks to buy", "trade setup", target
    prices) and recurring filler. Tip patterns match on the **title only**: a real story may quote
    an analyst's target price in its body. Typically drops ~17 of 600 items.
-4. **Merge duplicates** (`mergeStories`) — exact URL first, then headline similarity
+5. **Merge duplicates** (`mergeStories`) — exact URL first, then headline similarity
    (`DUPLICATE_THRESHOLD = 0.45` Jaccard over stopword-filtered title tokens, within one category).
    Produces `source_count` = distinct newsrooms carrying the story (`publisherKey` folds `m.`/`amp.`
    hosts and split domains like ET's, so one newsroom never counts twice). The canonical item is
    picked as resolved-URL > higher tier > longer headline — so an aggregator can tell us a story is
    big while a primary source supplies the link.
-5. **Rank** — `describeForRanking` renders one line per story carrying `tier` and `source_count`,
+6. **Categorize from content** — the summarize call also returns the `category`, constrained to
+   the enum in `NEWS_CATEGORIES`. The feed's category is passed only as a hint and is often
+   wrong: a Reuters _tech_ query carries rupee/RBI stories, an Indian startup query carries
+   DeepSeek funding. Anything outside the enum keeps the feed's category. ~20% of items get
+   re-filed. Note this means a category's pool can contain articles that arrived via another
+   category's feeds.
+7. **Rank** — `describeForRanking` renders one line per story carrying `tier` and `source_count`,
    the two signals the model cannot infer from a headline. Instruct it to treat `primary` as
    authoritative, and a high `source_count` as corroboration/importance rather than as quality.
 
 - **URLs must come only from fetched feed items.** `build-digests` has the model return indices
   into the candidate list instead of URLs, so there is nothing to validate after the fact.
 
-### Measured on the first production run (2026-10-12, 5 categories, 35 feeds)
+### Measured in production (2026-10-12, 5 followed categories, 43 feeds)
 
-- `ingest-news`: 71s, 951 items parsed → 170 merged stories → 119 shortlisted → **117 pooled**.
-  **17 Gemini calls** (10 summary batches + 7 embed batches), 13.3k input / 6.5k output tokens.
-- `build-digests`: 14s, **1 Gemini call**, 12.3k input / 1.3k output tokens, 117 candidates → 20
-  items. So the marginal cost of each extra user is one flash call over the same pool.
-- Recency windows plus the per-category cap are what keep this cheap: 754 of 951 parsed items were
-  outside their tier's window and never reached a prompt.
+Fan-out run, one invocation per category:
 
-### Known production limitation: Google News is blocked from the Edge runtime
+| category               | runtime | parsed | in window | stories | shortlist | new | inserted |
+| ---------------------- | ------- | ------ | --------- | ------- | --------- | --- | -------- |
+| AI                     | 39.0s   | 600    | 119       | 112     | 40        | 31  | 31       |
+| Indian Stock Market    | 30.9s   | 270    | 219       | 176     | 40        | 20  | 20       |
+| Global Tech            | 22.7s   | 149    | 121       | 118     | 40        | 18  | 18       |
+| Indian Startups & Tech | 14.7s   | 204    | 78        | 69      | 40        | 10  | 10       |
+| Software Development   | 13.8s   | 117    | 15        | 15      | 15        | 2   | 2        |
 
-All four Google News feeds returned **HTTP 503** from inside the Edge Function, while the identical
-URL returns 200 from Postgres egress (`net.http_get`) and from a laptop. Google blocks the
-functions network's IP range, not this project. Consequences:
+- **14 Gemini calls**, 10.0k input / 4.4k output tokens across the five invocations.
+  Longest single invocation **39s** against the 150s wall clock (the old single-invocation
+  run was 71s and growing with every feed added).
+- `build-digests`: 14s, **1 Gemini call**, 16.6k input / 1.3k output, 171 candidates → 20 items.
+  The marginal cost of each extra user is still one flash call over the same pool.
+- Pool that day: 198 articles, 59 publishers, 68 aggregator-tier, 54 unresolved URLs,
+  11 stories corroborated by more than one newsroom.
 
-- The aggregator tier contributes nothing in production except Hacker News (hnrss works fine), so
-  recall is lower than local testing suggests and `source_count` rarely exceeds 1.
-- The AI category is the worst hit: with no Google News and the lab blogs posting every few days,
-  one run yielded only 5 candidates.
-- Nothing is silently wrong — each failure is a `feed <name>: HTTP 503` warning in the logs and
-  shows up as a low `parsed` count for that category in the response.
-  Options when this matters enough to fix: fetch the aggregator tier through `net.http_post` from
-  Postgres and hand the XML to the function, proxy those requests, or replace the tier with an
-  aggregator that serves datacenter IPs. Do not just add retries — the 503 is a block, not a blip.
+### Google News is blocked from the Edge runtime — fetched from Postgres instead
+
+All Google News feeds answer **HTTP 503** inside an Edge Function while the identical URL
+returns 200 from Postgres egress (`net.http_get`) and from a laptop: Google blocks the
+functions network's IP range. Retries cannot fix a block, so the aggregator tier is fetched
+by the database instead:
+
+1. `prefetch_feeds` holds the aggregator URLs. **ingest-news writes this table on every
+   run** from `FEEDS`, so `_shared/feeds.ts` stays the single source of truth and adding a
+   feed needs no SQL change.
+2. `prefetch_aggregator_feeds()` (cron 00:50 UTC, 10 min ahead of ingest) fires one
+   `net.http_get` per URL and records the request id → URL mapping in `prefetch_requests`,
+   because `net._http_response` does not store the URL.
+3. `get_prefetched_feeds(interval)` — service-role-only RPC — returns `(url, status_code,
+content)` for requests newer than the interval. `ingest-news` prefers a prefetched body
+   and falls back to a direct fetch on a miss, so a failed prefetch degrades rather than breaks.
+
+Verified: all 9 aggregator feeds prefetch at HTTP 200 (153KB for the AI query), and a run
+pooled 68 aggregator-tier articles of which 54 carry `url_resolved = false`.
+
+## Cron (UTC)
+
+| when           | job                         | what                                                                |
+| -------------- | --------------------------- | ------------------------------------------------------------------- |
+| `50 0 * * *`   | `prefetch-aggregator-feeds` | pg_net fetches the aggregator tier                                  |
+| `0 1 * * *`    | `fanout-ingest-news`        | `fanout_ingest_news()` → one ingest-news call per followed category |
+| `30 1 * * *`   | `build-digests`             | one Gemini call per user over the shared pool                       |
+| `*/15 * * * *` | `send-briefs`               | emails whoever's `email_time` falls in this window                  |
+| `*/15 * * * *` | `check-reminders`           | emails task reminders that have come due                            |
+
+Defined in `20261012072101_cron_schedules.sql`. `invoke_edge_function(name, body)` reads
+`project_url` and `cron_secret` from Vault, so no secret is ever inlined into a
+`cron.job` row. **To run any of these by hand, call the same SQL** rather than inventing a
+new path — it is the exact production path.
 
 ## Edge Functions
 
@@ -161,21 +207,20 @@ functions network's IP range, not this project. Consequences:
    into the candidate list, never URLs or headlines — those are copied from `articles`, which is
    how the "URLs only from feed items" rule is enforced structurally. Writes `digests` +
    `news_items` and logs an `ai_events` row of kind `digest`.
-4. `send-briefs` (cron every 15 min) — for each user with `enabled`, check whether one of their
-   `email_times` falls in the current 15-min window in their timezone and hasn't been sent today;
-   build the email: AI "at a glance", today's tasks, overdue, birthdays in next 7 days, digest by
-   category with links and "Follow-up to: <earlier headline> (date)" lines. Track sends
-   (add a `brief_sends` table: user_id, sent_for date, slot 'HH:MM', unique).
-5. `check-reminders` (cron every 15 min) — tasks where `due_at - remind_before <= now()` and not
-   reminded for this occurrence → short email, set `last_reminded_at`.
-
-## Cron (UTC)
-
-- ingest-news: `0 1 * * *`
-- build-digests: `30 1 * * *`
-- send-briefs: `*/15 * * * *`
-- check-reminders: `*/15 * * * *`
-  Defined in a migration with `cron.schedule` + `net.http_post`, URL and secret read from Vault.
+4. `send-briefs` (cron every 15 min) — for each enabled user, is one of their `email_times`
+   inside the current 15-minute window **in their timezone** and not yet sent today? Then build
+   the email from what is already in the database — the digest's "at a glance", today's tasks,
+   overdue, birthdays in the next 7 days, news by category with links — and send it. **No Gemini
+   call.** Idempotency is the `brief_sends` unique constraint, claimed _before_ the send so two
+   overlapping ticks cannot both email; a failed send **releases** the claim, otherwise one SMTP
+   hiccup would mark the slot sent and the user would silently get nothing that day. An item with
+   `url_resolved = false` is labelled "via Google News".
+5. `check-reminders` (cron every 15 min) — tasks where `due_at - remind_before <= now()`, still
+   todo, and not reminded for _this occurrence_ (`last_reminded_at < fireAt`; the recurrence
+   roll-forward moving `due_at` is what resets it). Sends a short email, then stamps
+   `last_reminded_at` — in that order, so a failed send is retried next tick. Ignores anything
+   more than `MAX_LATENESS_HOURS` late (a day of downtime should not become a backlog of alarms)
+   and caps at 5 emails per user per tick.
 
 ## Source map (`_shared/feeds.ts`) — all URLs verified 2026-10-12
 
@@ -187,10 +232,13 @@ ranking prompt:
 - `aggregator` — Google News / Hacker News. Best recall and the signal of what is breaking, but
   no editorial control and the links need cleaning.
 
-40 feeds: 15 primary, 17 trusted, 8 aggregator.
+43 feeds: 15 primary, 19 trusted, 9 aggregator.
 
 - **AI**: OpenAI, Google DeepMind, Hugging Face blogs (primary) · MIT Technology Review,
-  Simon Willison, The Verge AI (trusted) · Google News `"artificial intelligence"` (aggregator)
+  Simon Willison, The Verge AI, **TechCrunch AI**, **The Decoder** (trusted) · Google News
+  `"artificial intelligence"`, **`hnrss.org/newest?q=AI+OR+LLM&points=50`** (aggregator).
+  The two newsrooms and the hnrss query were added because the lab blogs post every few
+  days: one run found only 5 AI candidates all day. Now ~40.
 - **Software Development**: GitHub Blog + `releases.atom` for node, TypeScript, Deno, React, Vite,
   Tailwind, Supabase, Postgres (primary) · InfoQ (trusted) · `hnrss.org/frontpage?points=100`
   (aggregator — the points threshold is why we use hnrss over the official HN feed)
@@ -210,7 +258,9 @@ ranking prompt:
 
 - **Send a browser User-Agent.** Business Standard answers 403 to anything bot-shaped. `feeds.ts`
   sets this for every fetch.
-- **Dead, in `DROPPED` with reasons — do not re-add**: PIB's `RssMain.aspx` (serves an `<rss>` with
+- **Dead, in `DROPPED` with reasons — do not re-add**: **VentureBeat** (HTTP 429 on every path,
+  spaced out — a block, not rate limiting to wait out); no Ars Technica AI feed exists;
+  PIB's `RssMain.aspx` (serves an `<rss>` with
   an empty `<channel>` for every ModId/Regid combination, so PIB is reached via a `site:` query
   instead); **Moneycontrol** (feed abandoned, newest item 23 Apr 2024 — it was in the old plan);
   Anthropic (no public RSS); the old `deepmind.google/discover/blog` path.
@@ -234,7 +284,10 @@ ranking prompt:
 - [x] Phase 3: `articles` pool migration, `ingest-news`, `build-digests`, `url_resolved` +
       "via Google News" tag in the news card. Both functions are deployed and have been run
       end to end; **cron is not wired yet** (that migration is Phase 4).
-- [ ] Phase 4: `send-briefs` + `check-reminders` + cron migration
+- [x] Phase 4: `send-briefs` + `check-reminders` + all five cron schedules. Both functions are
+      deployed and run clean end to end **up to the SMTP call** — sending is blocked until
+      `GMAIL_USER` / `GMAIL_APP_PASSWORD` (and `APP_URL`, for the links) are set with
+      `supabase secrets set`. Nothing else is outstanding.
 - [ ] Phase 5: follow-up linking, Insights page with real data, PWA polish
 - [ ] Phase 6 (optional): Telegram bot, weekly review email, "ask my news" chat, X highlights
 
