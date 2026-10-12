@@ -29,7 +29,7 @@ const DEFAULT_TZ = "Asia/Kolkata";
 const RECURRENCES = ["none", "daily", "weekly", "monthly", "yearly"] as const;
 const PRIORITIES = ["low", "medium", "high"] as const;
 /** Mirrors REMIND_OPTIONS in src/lib/task-logic.ts so the UI's select can show the result. */
-const REMINDERS = ["", "00:15:00", "01:00:00", "1 day", "3 days"] as const;
+const REMINDERS = ["none", "00:15:00", "01:00:00", "1 day", "3 days"] as const;
 
 type Recurrence = (typeof RECURRENCES)[number];
 type Priority = (typeof PRIORITIES)[number];
@@ -38,14 +38,21 @@ type Priority = (typeof PRIORITIES)[number];
 // this way avoids the nullable-union handling and keeps the parse below simple.
 const SCHEMA = {
   type: "object",
-  additionalProperties: false,
   properties: {
     tasks: {
       type: "array",
-      maxItems: MAX_TASKS,
       items: {
         type: "object",
-        additionalProperties: false,
+        propertyOrdering: [
+          "title",
+          "notes",
+          "due_at",
+          "all_day",
+          "recurrence",
+          "priority",
+          "tags",
+          "remind_before",
+        ],
         properties: {
           title: {
             type: "string",
@@ -72,7 +79,11 @@ const SCHEMA = {
             items: { type: "string" },
             description: "Only names from the user's existing tag list.",
           },
-          remind_before: { type: "string", enum: [...REMINDERS] },
+          remind_before: {
+            type: "string",
+            enum: [...REMINDERS],
+            description: 'Use "none" unless the text asks to be reminded ahead of time.',
+          },
         },
         required: [
           "title",
@@ -125,7 +136,7 @@ function systemPrompt(ctx: {
     '- recurrence: only when the text says it repeats ("every year", "roz", "har mahine", "daily").',
     "- A birthday or anniversary is yearly and all_day.",
     '- priority: high only for explicit urgency ("urgent", "asap", "zaroori"), else medium; low for idle wishes.',
-    "- remind_before: set only when the text asks to be reminded ahead of time.",
+    '- remind_before: "none" unless the text asks to be reminded ahead of time.',
     "- Write title and notes in English even when the input is Hindi, Hinglish or mixed.",
     "- Strip date, time and tag words out of the title.",
     "",
@@ -169,9 +180,10 @@ function normalize(raw: ModelTask, known: string[]): Record<string, unknown> | n
   const priority = (PRIORITIES as readonly string[]).includes(raw.priority)
     ? (raw.priority as Priority)
     : "medium";
-  const remind = (REMINDERS as readonly string[]).includes(raw.remind_before)
-    ? raw.remind_before
-    : "";
+  const remind =
+    (REMINDERS as readonly string[]).includes(raw.remind_before) && raw.remind_before !== "none"
+      ? raw.remind_before
+      : "";
   const notes = typeof raw.notes === "string" ? raw.notes.trim() : "";
 
   return {

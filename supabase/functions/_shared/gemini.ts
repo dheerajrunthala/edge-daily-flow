@@ -1,14 +1,17 @@
 // Gemini API access. Every model name the project uses lives here.
 //
-// The API is the /v1beta/interactions endpoint: a flat { model, input, response_format }
-// body that answers with { output_text, steps, usage }. Older Gemini code used
-// /models/<id>:generateContent with contents/generationConfig — that is not this shape.
+// Endpoint: POST /v1beta/models/<model>:generateContent, key in the x-goog-api-key
+// header, prompt in `contents`, structured output via generationConfig.responseSchema.
 
-/** Parsing and other low-volume, accuracy-sensitive calls. */
-export const GEMINI_PARSE_MODEL = "gemini-3.8-flash";
+/**
+ * Parsing and other low-volume, accuracy-sensitive calls.
+ * The "-latest" alias tracks the current Flash release, so this does not need bumping
+ * every time Google ships one — at the cost of the model shifting under us over time.
+ */
+export const GEMINI_PARSE_MODEL = "gemini-flash-latest";
 
 /** Per-article news summarizing — high volume, so the cheap tier. */
-export const GEMINI_BULK_MODEL = "gemini-3.5-flash-lite";
+export const GEMINI_BULK_MODEL = "gemini-flash-lite-latest";
 
 /** News similarity. news_items.embedding is vector(768), so keep these in step. */
 export const GEMINI_EMBEDDING_MODEL = "gemini-embedding-001";
@@ -35,8 +38,9 @@ function apiKey(): string {
 }
 
 /**
- * One structured-output call. `schema` is JSON Schema; the model is constrained to it,
- * so the response parses without the usual fenced-code-block cleanup.
+ * One structured-output call. `schema` must use the subset generateContent accepts:
+ * type, format, description, nullable, enum, items, properties, required,
+ * propertyOrdering, minItems/maxItems. `additionalProperties` is rejected with a 400.
  */
 export async function generateJson<T>(opts: {
   model?: string;
@@ -46,20 +50,19 @@ export async function generateJson<T>(opts: {
   temperature?: number;
   signal?: AbortSignal;
 }): Promise<{ data: T; usage: Usage }> {
-  const res = await fetch(`${API_ROOT}/interactions`, {
+  const model = opts.model ?? GEMINI_PARSE_MODEL;
+  const res = await fetch(`${API_ROOT}/models/${model}:generateContent`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-goog-api-key": apiKey() },
     signal: opts.signal ?? null,
     body: JSON.stringify({
-      model: opts.model ?? GEMINI_PARSE_MODEL,
-      system_instruction: opts.system,
-      input: opts.input,
-      response_format: {
-        type: "text",
-        mime_type: "application/json",
-        schema: opts.schema,
+      systemInstruction: { parts: [{ text: opts.system }] },
+      contents: [{ role: "user", parts: [{ text: opts.input }] }],
+      generationConfig: {
+        temperature: opts.temperature ?? 0,
+        responseMimeType: "application/json",
+        responseSchema: opts.schema,
       },
-      generation_config: { temperature: opts.temperature ?? 0 },
     }),
   });
 
@@ -75,7 +78,21 @@ export async function generateJson<T>(opts: {
     throw new GeminiError(`Gemini returned non-JSON: ${body.slice(0, 300)}`);
   }
 
-  const text = outputText(envelope);
+  // A safety block or a truncated answer both arrive as HTTP 200, so check explicitly
+  // rather than letting JSON.parse fail on a half-written object.
+  const blocked = envelope.promptFeedback?.blockReason;
+  if (blocked) throw new GeminiError(`Gemini blocked the prompt: ${blocked}`);
+
+  const candidate = envelope.candidates?.[0];
+  const finish = candidate?.finishReason;
+  if (finish && finish !== "STOP") {
+    throw new GeminiError(`Gemini stopped early: ${finish}`);
+  }
+
+  const text = (candidate?.content?.parts ?? [])
+    .map((p) => p.text ?? "")
+    .join("")
+    .trim();
   if (!text) throw new GeminiError("Gemini returned no output text");
 
   let data: T;
@@ -89,27 +106,16 @@ export async function generateJson<T>(opts: {
 }
 
 type GeminiEnvelope = {
-  output_text?: string;
-  steps?: { type?: string; content?: { type?: string; text?: string }[] }[];
-  usage?: Record<string, number | undefined>;
+  candidates?: {
+    content?: { parts?: { text?: string }[] };
+    finishReason?: string;
+  }[];
+  promptFeedback?: { blockReason?: string };
+  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
 };
 
-/** Prefer output_text; fall back to walking steps so a shape change degrades rather than breaks. */
-function outputText(envelope: GeminiEnvelope): string {
-  if (typeof envelope.output_text === "string" && envelope.output_text.trim()) {
-    return envelope.output_text;
-  }
-  const parts: string[] = [];
-  for (const step of envelope.steps ?? []) {
-    for (const part of step.content ?? []) {
-      if (typeof part.text === "string") parts.push(part.text);
-    }
-  }
-  return parts.join("").trim();
-}
-
 function readUsage(envelope: GeminiEnvelope): Usage {
-  const u = envelope.usage ?? {};
+  const u = envelope.usageMetadata ?? {};
   const num = (v: number | undefined) => (typeof v === "number" ? v : null);
-  return { inputTokens: num(u["total_input_tokens"]), outputTokens: num(u["total_output_tokens"]) };
+  return { inputTokens: num(u.promptTokenCount), outputTokens: num(u.candidatesTokenCount) };
 }
