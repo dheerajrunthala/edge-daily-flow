@@ -140,3 +140,77 @@ function readUsage(envelope: GeminiEnvelope): Usage {
   const num = (v: number | undefined) => (typeof v === "number" ? v : null);
   return { inputTokens: num(u.promptTokenCount), outputTokens: num(u.candidatesTokenCount) };
 }
+
+/**
+ * Embed many texts in one request. `batchEmbedContents` takes up to 100 sub-requests,
+ * and the whole point of using it is that the news pipeline embeds a few hundred
+ * articles a day — one HTTP call per 50 instead of one per article.
+ *
+ * outputDimensionality must stay at EMBEDDING_DIMENSIONS: articles.embedding and
+ * news_items.embedding are both vector(768).
+ *
+ * Returns one vector per input, in input order. Throws if the API returns a different
+ * count, since a silent misalignment would attach the wrong vector to an article.
+ */
+export async function embedBatch(
+  texts: string[],
+  opts: { taskType?: "SEMANTIC_SIMILARITY" | "RETRIEVAL_DOCUMENT"; signal?: AbortSignal } = {},
+): Promise<number[][]> {
+  if (texts.length === 0) return [];
+  if (texts.length > MAX_EMBED_BATCH) {
+    throw new GeminiError(`embedBatch got ${texts.length} texts, max is ${MAX_EMBED_BATCH}`);
+  }
+
+  const model = `models/${GEMINI_EMBEDDING_MODEL}`;
+  const payload = JSON.stringify({
+    requests: texts.map((text) => ({
+      model,
+      content: { parts: [{ text: text.slice(0, EMBED_MAX_CHARS) }] },
+      taskType: opts.taskType ?? "SEMANTIC_SIMILARITY",
+      outputDimensionality: EMBEDDING_DIMENSIONS,
+    })),
+  });
+
+  let res!: Response;
+  let body = "";
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    res = await fetch(`${API_ROOT}/${model}:batchEmbedContents`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": apiKey() },
+      signal: opts.signal ?? null,
+      body: payload,
+    });
+    body = await res.text();
+    if (res.ok || !RETRYABLE.has(res.status) || attempt === MAX_ATTEMPTS) break;
+    const backoff = 500 * 2 ** (attempt - 1) + Math.floor(Math.random() * 250);
+    console.warn(`embed ${res.status}, retrying in ${backoff}ms (attempt ${attempt})`);
+    await sleep(backoff);
+  }
+  if (!res.ok) {
+    throw new GeminiError(`Gemini embed ${res.status}: ${body.slice(0, 600)}`, res.status);
+  }
+
+  let parsed: { embeddings?: { values?: number[] }[] };
+  try {
+    parsed = JSON.parse(body) as typeof parsed;
+  } catch {
+    throw new GeminiError(`Gemini embed returned non-JSON: ${body.slice(0, 300)}`);
+  }
+
+  const vectors = (parsed.embeddings ?? []).map((e) => e.values ?? []);
+  if (vectors.length !== texts.length) {
+    throw new GeminiError(`Gemini embed returned ${vectors.length} vectors for ${texts.length}`);
+  }
+  for (const v of vectors) {
+    if (v.length !== EMBEDDING_DIMENSIONS) {
+      throw new GeminiError(`Gemini embed returned a ${v.length}-dim vector`);
+    }
+  }
+  return vectors;
+}
+
+/** API limit is 100 sub-requests; 50 keeps the payload comfortably inside it. */
+export const MAX_EMBED_BATCH = 50;
+
+/** Plenty for a headline plus a lead paragraph, and keeps the request small. */
+const EMBED_MAX_CHARS = 2000;

@@ -68,24 +68,28 @@ require a valid user JWT. The browser never calls Gemini.
 - `digests` (user_id, digest_date, status pending|ready|failed, summary, items_count,
   sources_scanned, emailed_at) unique per user per day
 - `news_items` (per-user digest entries: category, headline, summary, why_it_matters, url, source,
-  importance, rank, embedding, related_item_id, is_saved — users may only update is_saved)
-- `ai_events` (user_id, kind, items_processed, tokens) → Insights page + rate limiting
+  importance, rank, embedding, related_item_id, is_saved, url_resolved — users may only update
+  is_saved)
+- `articles` — the shared daily pool (category, url unique, title, source, feed_name, tier,
+  source_count, published_at, summary, embedding vector(768), url_resolved, fetched_on).
+  RLS: authenticated read only; the service role writes. `url` is unique across all time, so an
+  article is summarized and embedded exactly once, ever.
+- `ai_events` (user_id, kind, items_processed, tokens) → Insights page + rate limiting.
+  `user_id` is **nullable**: ingest-news is shared work with no owning user, and a null row
+  matches no RLS policy, so it stays out of every user's view and rate limit.
 
 ## Cost-aware news design (multi-user)
 
-Don't run the full Gemini pipeline per user. Phase 3 should add (via migration) a **shared daily
-article pool**, e.g. `articles` (category, url unique, title, source, published_at, summary,
-embedding, fetched_on) with RLS allowing authenticated read. Add `tier` and `source_count` columns
-so the ranking signals survive into the pool:
+Never run the full Gemini pipeline per user. Built in Phase 3 and live:
 
 1. `ingest-news` (cron, once daily ~06:30 IST / 01:00 UTC): for every category any enabled user
-   follows, fetch the feeds for that category, then run the item pipeline below, then summarize +
-   embed **once** into `articles`.
-2. `build-digests` (cron, right after): per user, a single cheap Gemini call ranks that day's
-   pooled articles for the user's categories against `profiles.news_profile`, picks top N, writes
+   follows, fetch that category's feeds, run the item pipeline below, then summarize + embed
+   **once** into the shared `articles` pool.
+2. `build-digests` (cron, right after): per user, a single Gemini call ranks that day's pooled
+   articles for the user's categories against `profiles.news_profile`, picks top N, writes
    `why_it_matters`, and inserts `digests` + `news_items` (copying fields + embedding).
-   Follow-up linking: nearest neighbour among that user's `news_items` from the last 14 days
-   (cosine similarity threshold ~0.85, tune it) → `related_item_id`.
+   Still to do (Phase 5) — follow-up linking: nearest neighbour among that user's `news_items`
+   from the last 14 days (cosine similarity threshold ~0.85, tune it) → `related_item_id`.
 
 ### Item pipeline (helpers all live in `_shared/feeds.ts`)
 
@@ -112,8 +116,33 @@ so the ranking signals survive into the pool:
    the two signals the model cannot infer from a headline. Instruct it to treat `primary` as
    authoritative, and a high `source_count` as corroboration/importance rather than as quality.
 
-- **URLs must come only from fetched feed items.** Validate every URL the model returns against
-  the input set; drop anything else.
+- **URLs must come only from fetched feed items.** `build-digests` has the model return indices
+  into the candidate list instead of URLs, so there is nothing to validate after the fact.
+
+### Measured on the first production run (2026-10-12, 5 categories, 35 feeds)
+
+- `ingest-news`: 71s, 951 items parsed → 170 merged stories → 119 shortlisted → **117 pooled**.
+  **17 Gemini calls** (10 summary batches + 7 embed batches), 13.3k input / 6.5k output tokens.
+- `build-digests`: 14s, **1 Gemini call**, 12.3k input / 1.3k output tokens, 117 candidates → 20
+  items. So the marginal cost of each extra user is one flash call over the same pool.
+- Recency windows plus the per-category cap are what keep this cheap: 754 of 951 parsed items were
+  outside their tier's window and never reached a prompt.
+
+### Known production limitation: Google News is blocked from the Edge runtime
+
+All four Google News feeds returned **HTTP 503** from inside the Edge Function, while the identical
+URL returns 200 from Postgres egress (`net.http_get`) and from a laptop. Google blocks the
+functions network's IP range, not this project. Consequences:
+
+- The aggregator tier contributes nothing in production except Hacker News (hnrss works fine), so
+  recall is lower than local testing suggests and `source_count` rarely exceeds 1.
+- The AI category is the worst hit: with no Google News and the lab blogs posting every few days,
+  one run yielded only 5 candidates.
+- Nothing is silently wrong — each failure is a `feed <name>: HTTP 503` warning in the logs and
+  shows up as a low `parsed` count for that category in the response.
+  Options when this matters enough to fix: fetch the aggregator tier through `net.http_post` from
+  Postgres and hand the XML to the function, proxy those requests, or replace the tier with an
+  aggregator that serves datacenter IPs. Do not just add retries — the 503 is a block, not a blip.
 
 ## Edge Functions
 
@@ -121,13 +150,23 @@ so the ranking signals survive into the pool:
    (title, notes, due_at ISO with the user's UTC offset, all_day, recurrence, priority, tags,
    remind_before). Pass today's date, weekday and the user's timezone + existing tag names in the
    prompt. Returns a preview only; the UI saves. Rate limit: 50 calls/user/day (count `ai_events`).
-2. `ingest-news` + `build-digests` — see above.
-3. `send-briefs` (cron every 15 min) — for each user with `enabled`, check whether one of their
+2. `ingest-news` (cron secret) — builds the shared pool. Fetches only the categories some
+   enabled user follows, applies the recency windows, junk filter and merge, cuts to 40
+   candidates per category, then summarizes in batches of 12 on `GEMINI_BULK_MODEL` and embeds
+   in batches of 50. Upserts into `articles` with `ignoreDuplicates`, so a URL already pooled is
+   never re-summarized. Returns per-category counts, gemini_calls and token totals.
+3. `build-digests` (cron secret, optional `{user_id, force}` body) — **one** Gemini call per user
+   per day on `GEMINI_PARSE_MODEL`: it ranks that day's pool for the user's categories against
+   `profiles.news_profile` and writes importance + why_it_matters. The model returns **indices**
+   into the candidate list, never URLs or headlines — those are copied from `articles`, which is
+   how the "URLs only from feed items" rule is enforced structurally. Writes `digests` +
+   `news_items` and logs an `ai_events` row of kind `digest`.
+4. `send-briefs` (cron every 15 min) — for each user with `enabled`, check whether one of their
    `email_times` falls in the current 15-min window in their timezone and hasn't been sent today;
    build the email: AI "at a glance", today's tasks, overdue, birthdays in next 7 days, digest by
    category with links and "Follow-up to: <earlier headline> (date)" lines. Track sends
    (add a `brief_sends` table: user_id, sent_for date, slot 'HH:MM', unique).
-4. `check-reminders` (cron every 15 min) — tasks where `due_at - remind_before <= now()` and not
+5. `check-reminders` (cron every 15 min) — tasks where `due_at - remind_before <= now()` and not
    reminded for this occurrence → short email, set `last_reminded_at`.
 
 ## Cron (UTC)
@@ -192,7 +231,9 @@ ranking prompt:
 
 - [ ] Phase 1: review Lovable draft against schema; fix data wiring, recurrence roll-forward, types
 - [ ] Phase 2: `parse-task` + quick-add preview, rate limiting
-- [ ] Phase 3: shared article pool migration, `ingest-news`, `build-digests`, news page polish
+- [x] Phase 3: `articles` pool migration, `ingest-news`, `build-digests`, `url_resolved` +
+      "via Google News" tag in the news card. Both functions are deployed and have been run
+      end to end; **cron is not wired yet** (that migration is Phase 4).
 - [ ] Phase 4: `send-briefs` + `check-reminders` + cron migration
 - [ ] Phase 5: follow-up linking, Insights page with real data, PWA polish
 - [ ] Phase 6 (optional): Telegram bot, weekly review email, "ask my news" chat, X highlights

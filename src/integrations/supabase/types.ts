@@ -22,7 +22,7 @@ export type Database = {
           items_processed: number
           kind: string
           output_tokens: number | null
-          user_id: string
+          user_id: string | null
         }
         Insert: {
           created_at?: string
@@ -31,7 +31,7 @@ export type Database = {
           items_processed?: number
           kind: string
           output_tokens?: number | null
-          user_id: string
+          user_id?: string | null
         }
         Update: {
           created_at?: string
@@ -40,7 +40,58 @@ export type Database = {
           items_processed?: number
           kind?: string
           output_tokens?: number | null
-          user_id?: string
+          user_id?: string | null
+        }
+        Relationships: []
+      }
+      articles: {
+        Row: {
+          category: string
+          created_at: string
+          embedding: string | null
+          feed_name: string
+          fetched_on: string
+          id: string
+          published_at: string | null
+          source: string
+          source_count: number
+          summary: string | null
+          tier: string
+          title: string
+          url: string
+          url_resolved: boolean
+        }
+        Insert: {
+          category: string
+          created_at?: string
+          embedding?: string | null
+          feed_name: string
+          fetched_on: string
+          id?: string
+          published_at?: string | null
+          source: string
+          source_count?: number
+          summary?: string | null
+          tier: string
+          title: string
+          url: string
+          url_resolved?: boolean
+        }
+        Update: {
+          category?: string
+          created_at?: string
+          embedding?: string | null
+          feed_name?: string
+          fetched_on?: string
+          id?: string
+          published_at?: string | null
+          source?: string
+          source_count?: number
+          summary?: string | null
+          tier?: string
+          title?: string
+          url?: string
+          url_resolved?: boolean
         }
         Relationships: []
       }
@@ -99,6 +150,7 @@ export type Database = {
           source: string | null
           summary: string
           url: string
+          url_resolved: boolean
           user_id: string
           why_it_matters: string | null
         }
@@ -117,6 +169,7 @@ export type Database = {
           source?: string | null
           summary: string
           url: string
+          url_resolved?: boolean
           user_id: string
           why_it_matters?: string | null
         }
@@ -135,6 +188,7 @@ export type Database = {
           source?: string | null
           summary?: string
           url?: string
+          url_resolved?: boolean
           user_id?: string
           why_it_matters?: string | null
         }

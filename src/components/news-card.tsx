@@ -39,10 +39,22 @@ export function NewsCard({
         </p>
       )}
       <div className="mt-4 flex items-center justify-between gap-2">
-        <p className="truncate text-xs text-muted-foreground">
-          {item.source}
-          {item.published_at && ` · ${relativeTime(item.published_at)}`}
-        </p>
+        <div className="flex min-w-0 items-center gap-2">
+          <p className="truncate text-xs text-muted-foreground">
+            {item.source}
+            {item.published_at && ` · ${relativeTime(item.published_at)}`}
+          </p>
+          {/* The link is still a Google News redirect, so say so rather than implying
+              it goes straight to the publisher. */}
+          {!item.url_resolved && (
+            <span
+              title="Opens via Google News, which redirects to the publisher"
+              className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground"
+            >
+              via Google News
+            </span>
+          )}
+        </div>
         <div className="flex shrink-0 gap-1">
           <button
             onClick={() => toggle.mutate(item)}

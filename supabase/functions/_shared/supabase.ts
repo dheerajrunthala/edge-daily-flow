@@ -67,11 +67,14 @@ export type AiEventKind = "task_parse" | "digest" | "summary" | "embedding" | "b
 /**
  * Record a Gemini call. Fire-and-forget by design: losing a log line must never fail
  * the user's request, but it is the table the rate limit counts, so it is awaited.
+ *
+ * `userId` is null for shared pipeline work (ingest-news): there is no owning user, and
+ * a null row matches no RLS policy, so it stays out of every user's view and rate limit.
  */
 export async function logAiEvent(
   admin: SupabaseClient,
   event: {
-    userId: string;
+    userId: string | null;
     kind: AiEventKind;
     itemsProcessed?: number;
     inputTokens?: number | null;

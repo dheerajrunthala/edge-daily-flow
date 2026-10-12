@@ -709,6 +709,67 @@ export function mergeStories(items: FeedItem[]): MergedStory[] {
   });
 }
 
+// ------------------------------------------------- recency and shortlisting
+
+/**
+ * How far back an item may be published and still count as today's news.
+ *
+ * Primary sources get three days because they are low-cadence by nature — a lab blog or
+ * an RBI press release is still the most useful thing in its category two days later,
+ * and the GitHub release feeds would otherwise contribute nothing most days. Newsrooms
+ * and aggregators get 24h: there is always more where that came from.
+ */
+export const RECENCY_WINDOW_HOURS: Record<FeedTier, number> = {
+  primary: 72,
+  trusted: 24,
+  aggregator: 24,
+};
+
+/** Undated items are kept: several feeds omit dates, and dropping them loses real news. */
+export function isRecent(item: FeedItem, now: Date = new Date()): boolean {
+  if (!item.publishedAt) return true;
+  const hours = (now.getTime() - item.publishedAt.getTime()) / 3_600_000;
+  if (hours < -2) return false; // clock skew tolerated, "published tomorrow" is not
+  return hours <= RECENCY_WINDOW_HOURS[item.feed.tier];
+}
+
+/**
+ * Hard ceiling on what reaches Gemini per category, per run. The pool is ~600 items a
+ * day; summarizing all of it would be most of the cost of the product for no benefit.
+ */
+export const MAX_CANDIDATES_PER_CATEGORY = 40;
+
+/**
+ * Score a merged story for shortlisting. Deliberately a weighted sum rather than a
+ * lexicographic sort: sorting by tier first would hand all 40 slots to whichever
+ * category has many primary feeds (Software Development has ten) and crowd out a
+ * breaking story that five newsrooms are carrying.
+ *
+ *   tier         primary 9 / trusted 6 / aggregator 3
+ *   corroboration  +2 per extra newsroom, capped at +8
+ *   freshness      +6 for brand new, decaying to 0 over 36h
+ */
+export function candidateScore(story: MergedStory, now: Date = new Date()): number {
+  const tier = TIER_WEIGHT[story.tier] * 3;
+  const corroboration = Math.min(story.sourceCount - 1, 4) * 2;
+  const hours = story.item.publishedAt
+    ? (now.getTime() - story.item.publishedAt.getTime()) / 3_600_000
+    : 24; // undated: treat as a day old rather than brand new
+  const freshness = Math.max(0, 6 - Math.max(0, hours) / 6);
+  return tier + corroboration + freshness;
+}
+
+/** Highest-scoring stories first, capped. */
+export function shortlist(
+  stories: MergedStory[],
+  now: Date = new Date(),
+  limit: number = MAX_CANDIDATES_PER_CATEGORY,
+): MergedStory[] {
+  return [...stories]
+    .sort((a, b) => candidateScore(b, now) - candidateScore(a, now))
+    .slice(0, limit);
+}
+
 /**
  * The one line per story that goes into the ranking prompt. Tier and source_count are
  * the two signals the model cannot infer from a headline.
