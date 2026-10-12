@@ -2,8 +2,8 @@
 
 Multi-user web app (open signups). Built by an Indian software engineer as a showcase of practical
 AI use for efficiency: task management with natural-language input, and a daily AI-curated news
-digest delivered by email. Used via the published Lovable URL; mobile app may come later on the
-same Supabase backend.
+digest delivered by email. Used via the published app at **https://dailyedgeapp.lovable.app**;
+mobile app may come later on the same Supabase backend.
 
 ## Ownership split (important)
 
@@ -38,7 +38,8 @@ same Supabase backend.
 ## Secrets — never in code, commits, or this file
 
 Edge Function secrets (set by the owner with `supabase secrets set`):
-`GEMINI_API_KEY`, `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `CRON_SECRET`, `APP_URL` (published Lovable URL),
+`GEMINI_API_KEY`, `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `CRON_SECRET`,
+`APP_URL` (`https://dailyedgeapp.lovable.app`),
 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_BOT_USERNAME`,
 `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`.
 Vault (for pg_cron → functions): `project_url`, `cron_secret`.
@@ -177,8 +178,8 @@ Two independent mechanisms, and keeping them separate is the point:
     worker only re-subscribes locally and `syncSubscription()` re-upserts whatever the
     browser holds on **every app load**. That plus 404/410 pruning is how a rotated
     endpoint repairs itself.
-  - Service workers need a real secure origin: **test on the published URL**, never the
-    Lovable preview iframe.
+  - Service workers need a real secure origin: **test on https://dailyedgeapp.lovable.app**,
+    never the Lovable preview iframe.
 
 ### Telegram (@DailyEdgeAppBot)
 
