@@ -37,10 +37,20 @@ function apiKey(): string {
   return key;
 }
 
+/** Transient upstream conditions: capacity (503), quota bursts (429), and 5xx blips. */
+const RETRYABLE = new Set([429, 500, 502, 503, 504]);
+const MAX_ATTEMPTS = 3;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 /**
  * One structured-output call. `schema` must use the subset generateContent accepts:
  * type, format, description, nullable, enum, items, properties, required,
  * propertyOrdering, minItems/maxItems. `additionalProperties` is rejected with a 400.
+ *
+ * Retries retryable statuses with exponential backoff and jitter. "high demand" 503s from
+ * the shared Flash capacity are common enough that one attempt is not good enough, and the
+ * news pipeline will call this unattended from cron.
  */
 export async function generateJson<T>(opts: {
   model?: string;
@@ -51,22 +61,33 @@ export async function generateJson<T>(opts: {
   signal?: AbortSignal;
 }): Promise<{ data: T; usage: Usage }> {
   const model = opts.model ?? GEMINI_PARSE_MODEL;
-  const res = await fetch(`${API_ROOT}/models/${model}:generateContent`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": apiKey() },
-    signal: opts.signal ?? null,
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: opts.system }] },
-      contents: [{ role: "user", parts: [{ text: opts.input }] }],
-      generationConfig: {
-        temperature: opts.temperature ?? 0,
-        responseMimeType: "application/json",
-        responseSchema: opts.schema,
-      },
-    }),
+  const payload = JSON.stringify({
+    systemInstruction: { parts: [{ text: opts.system }] },
+    contents: [{ role: "user", parts: [{ text: opts.input }] }],
+    generationConfig: {
+      temperature: opts.temperature ?? 0,
+      responseMimeType: "application/json",
+      responseSchema: opts.schema,
+    },
   });
 
-  const body = await res.text();
+  let res!: Response;
+  let body = "";
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    res = await fetch(`${API_ROOT}/models/${model}:generateContent`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": apiKey() },
+      signal: opts.signal ?? null,
+      body: payload,
+    });
+    body = await res.text();
+    if (res.ok || !RETRYABLE.has(res.status) || attempt === MAX_ATTEMPTS) break;
+    // 0.5s, then 1s, each with up to 250ms of jitter so parallel callers don't sync up.
+    const backoff = 500 * 2 ** (attempt - 1) + Math.floor(Math.random() * 250);
+    console.warn(`gemini ${res.status}, retrying in ${backoff}ms (attempt ${attempt})`);
+    await sleep(backoff);
+  }
+
   if (!res.ok) {
     throw new GeminiError(`Gemini ${res.status}: ${body.slice(0, 600)}`, res.status);
   }

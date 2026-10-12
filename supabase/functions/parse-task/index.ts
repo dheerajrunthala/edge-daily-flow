@@ -273,7 +273,17 @@ Deno.serve(async (req: Request) => {
     }
     if (err instanceof GeminiError) {
       console.error("gemini failure", err.message);
-      return json({ error: "The AI service did not respond properly. Please try again." }, 502);
+      // Overload survives the retries often enough to deserve its own wording — telling the
+      // user to try again in a moment is actionable, "did not respond properly" is not.
+      const busy = err.status === 503 || err.status === 429;
+      return json(
+        {
+          error: busy
+            ? "The AI model is busy right now. Please try again in a moment."
+            : "The AI service did not respond properly. Please try again.",
+        },
+        busy ? 503 : 502,
+      );
     }
     console.error("parse-task failed", err);
     return json({ error: "Something went wrong parsing that." }, 500);
