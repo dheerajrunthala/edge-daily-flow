@@ -303,7 +303,12 @@ async function escalate(
     };
   }
 
-  const results = await notify(recipient, payloadFor(task, target.stage, recipient, now), claimed);
+  const results = await notify(
+    admin,
+    recipient,
+    payloadFor(task, target.stage, recipient, now),
+    claimed,
+  );
 
   // Hand back the channels that failed, so the next tick tries them again. Without this
   // one SMTP hiccup would silently retire the stage.
@@ -388,9 +393,13 @@ function payloadFor(task: TaskRow, stage: string, recipient: Recipient, now: Dat
     subtitle: task.priority === "high" ? `${subtitle} · high priority` : subtitle,
     body: task.notes,
     note: stage.startsWith("nag:")
-      ? "You're getting this because the task is still open. Snooze it from Telegram, or mark it done."
+      ? "You're getting this because the task is still open. Snooze it or mark it done from any reminder."
       : "A reminder you set in Daily Edge.",
-    // Telegram-only; the email gets the "Open your tasks" link instead.
+    // Lets push mint its own single-task action token and collapse the ladder's rungs
+    // into one notification on screen.
+    taskId: task.id,
+    // Telegram-only; the email gets the "Open your tasks" link instead, and push builds
+    // its own two buttons (a service worker has no callback_data to send).
     actions: [
       { label: "✓ Done", data: `done:${task.id}` },
       { label: "💤 1h", data: `snooze:${task.id}` },

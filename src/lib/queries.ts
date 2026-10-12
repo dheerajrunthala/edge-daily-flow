@@ -26,6 +26,7 @@ export const qk = {
   prefs: ["prefs"] as const,
   notifyPrefs: ["notification_prefs"] as const,
   telegram: ["telegram_link"] as const,
+  pushSubs: ["push_subscriptions"] as const,
   tags: ["tags"] as const,
   tasks: ["tasks"] as const,
   digests: ["digests"] as const,
@@ -98,6 +99,25 @@ export const useTelegramLink = (poll = false) =>
         .select("chat_id, linked_at")
         .eq("user_id", id)
         .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+  });
+
+/**
+ * The browsers this account has subscribed. Readable by the owner so Settings can say
+ * "on in 2 browsers"; the rows themselves are only ever written by push-subscribe.
+ */
+export const usePushSubscriptions = () =>
+  useQuery({
+    queryKey: qk.pushSubs,
+    queryFn: async () => {
+      const id = await uid();
+      const { data, error } = await supabase
+        .from("push_subscriptions")
+        .select("id, endpoint, user_agent, created_at, last_used_at")
+        .eq("user_id", id)
+        .order("created_at", { ascending: false });
       if (error) throw error;
       return data;
     },

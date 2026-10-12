@@ -39,7 +39,8 @@ same Supabase backend.
 
 Edge Function secrets (set by the owner with `supabase secrets set`):
 `GEMINI_API_KEY`, `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `CRON_SECRET`, `APP_URL` (published Lovable URL),
-`TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_BOT_USERNAME`.
+`TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_BOT_USERNAME`,
+`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`.
 Vault (for pg_cron → functions): `project_url`, `cron_secret`.
 Cron-invoked functions require header `x-cron-secret` = `CRON_SECRET`. User-invoked functions
 require a valid user JWT. The browser never calls Gemini.
@@ -62,10 +63,11 @@ across the recipient's enabled channels and reports each independently, so one c
 failing never silences another.
 
 - **Channels** live in `notification_prefs.channels` (`notification_channel` enum).
-  `email` and `telegram` deliver; `push` is in the enum and in the UI but its sender is a
-  stub — browser push needs a service worker and stored subscriptions, which is Phase 6.
+  All three deliver: `email`, `telegram` and `push` (web push — see below).
   `activeChannels()` is exported separately from `notify()` so a caller can claim its
   idempotency rows per channel before sending.
+- `notify()` takes the service-role client as its first argument, because the push sender
+  reads the recipient's subscriptions and prunes the dead ones.
 - **Quiet hours** are enforced inside notify.ts, never by callers: it is a property of the
   user, and forgetting it at one call site is the bug that wakes someone at 3am. Wall clock
   in the user's timezone, normally wrapping midnight (22:00 → 07:00); `start = end` means
@@ -113,6 +115,70 @@ stages that silently go nowhere.
   `MAX_NAGS = 24`, whichever comes first, cap `MAX_PER_USER = 5` notifications per tick, and
   drop fixed stages more than `MAX_LATENESS_HOURS = 6` late. Nags are exempt from the
   lateness horizon because `plan()` only ever emits the current one.
+
+### Browser notifications (Phase 6)
+
+Two independent mechanisms, and keeping them separate is the point:
+
+- **In-app (tab open)** — `NotificationCenter`, mounted inside `AppShell`, subscribes over
+  Supabase Realtime to the user's own `task_notifications` inserts and renders a toast +
+  chime + tab badge. It is a **view of the ledger, not a fourth channel**: the row is
+  written by check-reminders _before_ it sends, so an in-app toast cannot disagree with
+  what actually went out, nothing is scheduled in the browser, and a laptop waking from
+  sleep shows nothing stale because it simply never receives the rows it missed.
+  `task_notifications` is in the `supabase_realtime` publication; realtime applies the
+  table's own RLS (`user_id = auth.uid()`) to the socket's JWT.
+  - One notification writes one row **per channel**, which arrive as separate events, so
+    the component collapses on `task_id|due_at|stage` or the user gets three toasts.
+  - Rows with `delivered = false` are bookkeeping for a superseded stage and are skipped.
+  - The chime is synthesized in WebAudio (no asset) and must be **unlocked on the first
+    user gesture** — a context created before any interaction starts suspended and cannot
+    be resumed later. A reminder arriving before the first click is therefore silent.
+  - Title flash and favicon badge (`src/lib/tab-alert.ts`) only run while the tab is
+    hidden, and clear on focus. The title interval re-reads `document.title` whenever it
+    is neither of its own two strings, so navigating mid-alert doesn't get overwritten.
+- **Web push (tab closed)** — `push_subscriptions` + `public/sw.js` + the `push` channel.
+  - **The VAPID public key is served by `push-subscribe`, not bundled.** The keys live
+    only in the platform's secret store and rotating them needs no frontend rebuild.
+    Secrets: `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` (raw base64url, exactly as
+    `npx web-push generate-vapid-keys` prints them), `VAPID_SUBJECT`. `_shared/push.ts`
+    splits the 65-byte public point into JWK `x`/`y` because Web Crypto won't import the
+    raw form.
+  - Sender is `jsr:@negrel/webpush` — Deno-native and Web Crypto only; verified to
+    resolve in the Edge runtime. A fresh `ApplicationServer` per send batch, because its
+    ECDH key is meant to be ephemeral (RFC 8291 §2).
+  - **404/410 means the subscription is gone**, so the row is deleted. That is the whole
+    of expiry handling, and why `sendPush` reports `removed` separately from `failed`.
+    Every endpoint failing for any _other_ reason throws, so the ledger claim is released
+    and the next tick retries.
+  - **Done / Snooze 10m are handled in the service worker, which has no Supabase
+    session** — it lives in the page's localStorage, which a worker cannot read, and the
+    worker often runs with no page open. So each notification carries an HMAC **action
+    token** naming one user and one task, expiring in 24h, and `push-action` trusts the
+    signature instead of a bearer token. The signing key is HKDF-derived from
+    `SUPABASE_SERVICE_ROLE_KEY` (salt `daily-edge/push-action`, info `v1`), so there is no
+    extra secret and the derived key cannot be used as the service role. The task is
+    re-read scoped to the user id _inside_ the token, exactly as the Telegram webhook
+    scopes a press to the chat's user.
+  - **Two buttons, not three.** Chrome renders at most two notification actions and
+    silently drops the rest; "Tomorrow" stays a Telegram/app affordance.
+  - `requireInteraction: true` is honoured on macOS **only** if Chrome's notification
+    style is "Alerts", not "Banners" — the Settings card says so, because under Banners
+    the card vanishes in seconds and takes the buttons with it.
+  - `tag` is `task:<id>` + `renotify`, so a later rung replaces the earlier card in place
+    and still alerts rather than stacking three "still open" notifications.
+  - **The service worker is a plain `public/sw.js`, deliberately not generated.**
+    `vite-plugin-pwa` (`injectManifest`) was tried and emits to `dist/service-worker.js`,
+    which the nitro build never copies into `.output/public/` — it would 404 in
+    production. There is also nothing to precache (the app is SSR) and nothing to inject:
+    every payload carries both the URL to open and the URL to post a button press to, so
+    the worker needs no build-time configuration at all.
+  - **`pushsubscriptionchange` cannot tell the server** (no session in the worker), so the
+    worker only re-subscribes locally and `syncSubscription()` re-upserts whatever the
+    browser holds on **every app load**. That plus 404/410 pruning is how a rotated
+    endpoint repairs itself.
+  - Service workers need a real secure origin: **test on the published URL**, never the
+    Lovable preview iframe.
 
 ### Telegram (@DailyEdgeAppBot)
 
@@ -168,6 +234,10 @@ stages that silently go nowhere.
 - `tasks.snoozed_until` — "not now"; suppresses every stage before that instant.
 - `telegram_links` (user_id, chat_id unique, one-time code + expiry, linked_at)
   — owner-readable only; written by `request_telegram_link()` and the webhook.
+- `push_subscriptions` (user_id, endpoint **unique**, p256dh, auth, user_agent,
+  last_used_at) — one row per browser that granted permission. The endpoint is the natural
+  key, so re-subscribing updates rather than duplicates. Owner may select and delete (the
+  Settings list and "turn off"); only `push-subscribe` writes, via the service role.
 - `prefetch_feeds` / `prefetch_requests` — plumbing for the Google News workaround below.
   RLS on with **no policies**: service role and SECURITY DEFINER functions only.
 - `ai_events` (user_id, kind, items_processed, tokens) → Insights page + rate limiting.
@@ -327,7 +397,16 @@ new path — it is the exact production path.
    `task_notifications` per channel, fans out through `notify()`, releases the claim on a
    failed send, and stamps `last_reminded_at` for the rest of the app. A tick with nothing
    due is one indexed query and returns in well under a second.
-6. `telegram-webhook` (**no JWT**; `x-telegram-bot-api-secret-token` verified against
+6. `push-subscribe` (user JWT) — `{"action":"key"}` returns the VAPID public key;
+   `subscribe` / `unsubscribe` store and drop a browser's `PushSubscription`; `test` sends
+   a test notification. Subscribing switches the `push` channel on, and unsubscribing the
+   **last** device switches it off — one laptop going quiet must not silence the phone.
+   `test` calls `sendPush` directly rather than `notify()`: the user is standing there
+   asking for it, so quiet hours are not what they're testing.
+7. `push-action` (**no JWT**; authenticated by the HMAC action token described under
+   Notifications) — the Done / Snooze 10m buttons on a desktop notification. Does nothing
+   but those two mutations on the one task the token names.
+8. `telegram-webhook` (**no JWT**; `x-telegram-bot-api-secret-token` verified against
    `TELEGRAM_WEBHOOK_SECRET`) — `/start <code>` linking, `/today` `/tasks` `/brief` `/help`,
    free text → `parseTasks()` → rows in `tasks` (no preview step in a chat), and the
    Done / Snooze 1h / Tomorrow buttons. Always answers 200 after the secret check, because a
@@ -414,14 +493,21 @@ ranking prompt:
       `due` and `nag:k` rungs (the test task was completed four minutes before it came
       due), `1h`, quiet-hours suppression, snooze and Tomorrow, and the free-text →
       `parse-task` path from a chat.
-- [ ] Phase 6: follow-up linking, Insights page with real data, PWA polish + web push
-      (the `push` channel is already in the enum and the UI)
+- [ ] Phase 6: follow-up linking, Insights page with real data, PWA polish.
+      **Browser notifications are done** (2026-10-12): in-app realtime toast + chime +
+      tab/favicon badge, `push_subscriptions`, `public/sw.js`, `push-subscribe`,
+      `push-action`, the `push` sender in `notify.ts`, and the Settings card with
+      enable/test and the macOS "Alerts" hint. Verified: both functions boot in the Edge
+      runtime (so `jsr:@negrel/webpush` resolves), `push-action` rejects an unsigned
+      token, and check-reminders still returns 200 on the new module graph.
+      **Not yet exercised:** a real end-to-end push to a granted browser, the Done /
+      Snooze buttons from a notification, and expiry pruning on 404/410.
 - [ ] Phase 7 (optional): weekly review email, "ask my news" chat, X highlights
 
 ## Working conventions
 
 - Test each Edge Function by invoking it and reading logs via MCP before wiring cron.
 - `npm run build` and `npm run lint` must pass before committing frontend changes.
-- Shared helpers in `supabase/functions/_shared/` (gemini.ts, email.ts, notify.ts, telegram.ts,
-  supabase.ts, feeds.ts, time.ts, tasks.ts, parse-tasks.ts).
+- Shared helpers in `supabase/functions/_shared/` (gemini.ts, email.ts, notify.ts, push.ts,
+  telegram.ts, supabase.ts, feeds.ts, time.ts, tasks.ts, parse-tasks.ts).
 - Log every Gemini call to `ai_events`.

@@ -13,6 +13,7 @@ import {
 import { useEffect, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Logo } from "./common";
+import { NotificationCenter } from "./notification-center";
 import { supabase } from "@/integrations/supabase/client";
 import { useProfile } from "@/lib/queries";
 
@@ -50,6 +51,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-dvh bg-background">
+      {/* Renders nothing; mounted here so every signed-in page gets live reminders. */}
+      <NotificationCenter />
+
       {/* Desktop sidebar */}
       <aside
         className={cn(
