@@ -112,6 +112,12 @@ Never run the full Gemini pipeline per user. Built in Phase 3 and live:
    unresolved Google News links (their page describes Google News), skip non-`text/html` (SEBI
    links straight to PDFs), and require 60+ characters because Hugging Face serves "A Blog post
    by Ai2 on Hugging Face" and RBI "Press Releases - Reserve Bank of India" for every article.
+   The floor has a real cost: some pages have nothing usable at all, and those keep a
+   title-only summary. Measured on a repair run over 8 such articles, 5 were fixed and 3 were
+   not — Hugging Face (boilerplate on every post), a Substack whose description names its
+   audience rather than its content, and a page with no description tag. Reading the page body
+   instead would need real content extraction: the first `<p>` on a Hugging Face blog post is
+   the site navigation, so a naive body fallback would summarize a menu.
 4. **Filter junk** (`isJunk`) — sponsored/brand-post/advertorial, plus the stock-tip genre that
    floods the Indian market feeds (multibagger, "top 5 stocks to buy", "trade setup", target
    prices) and recurring filler. Tip patterns match on the **title only**: a real story may quote
@@ -201,6 +207,12 @@ new path — it is the exact production path.
    candidates per category, then summarizes in batches of 12 on `GEMINI_BULK_MODEL` and embeds
    in batches of 50. Upserts into `articles` with `ignoreDuplicates`, so a URL already pooled is
    never re-summarized. Returns per-category counts, gemini_calls and token totals.
+   **Repair pass:** `{"repair": true, "limit"?: n}` re-summarizes pooled articles whose
+   summary is really just their headline — the scar `summarize` leaves whenever the model
+   skips an item or a batch errors. It re-runs the same enrichment and summarizer, writes a
+   fresh embedding (the old vector was derived from the bad summary), and carries the fix
+   into any `news_items` row that still holds the old copy. Articles with no usable
+   description are left alone rather than rewritten badly. Safe to re-run.
 3. `build-digests` (cron secret, optional `{user_id, force}` body) — **one** Gemini call per user
    per day on `GEMINI_PARSE_MODEL`: it ranks that day's pool for the user's categories against
    `profiles.news_profile` and writes importance + why_it_matters. The model returns **indices**

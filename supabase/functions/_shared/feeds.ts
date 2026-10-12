@@ -611,14 +611,17 @@ const EXCERPT_MAX_BYTES = 200_000;
  * Fetch an article page and pull its og:description (or meta description) out, for items
  * whose feed gave no usable excerpt. Returns null rather than throwing: an article with a
  * thin excerpt is still worth pooling.
+ *
+ * Takes the URL rather than a FeedItem so the repair path, which starts from `articles`
+ * rows and has no FeedItem, can use exactly the same guards.
  */
-export async function fetchExcerpt(item: FeedItem): Promise<string | null> {
+export async function fetchExcerpt(url: string, resolved = true): Promise<string | null> {
   // An unresolved Google News link serves Google's own shell page, whose description
   // describes Google News. Never enrich from one.
-  if (!item.resolved || isGoogleNewsLink(item.url)) return null;
+  if (!resolved || isGoogleNewsLink(url)) return null;
 
   try {
-    const res = await fetch(item.url, {
+    const res = await fetch(url, {
       headers: { ...FETCH_HEADERS, accept: "text/html,application/xhtml+xml" },
       redirect: "follow",
       signal: AbortSignal.timeout(10_000),

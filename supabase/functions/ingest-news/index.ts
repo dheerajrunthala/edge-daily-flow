@@ -64,6 +64,10 @@ const TIME_BUDGET_MS = 110_000;
 const PREFETCH_MAX_AGE = "45 minutes";
 /** The pool is an Indian-morning artifact, so "today" is IST. */
 const POOL_TZ = "Asia/Kolkata";
+/** Articles the repair pass will look at in one invocation. */
+const REPAIR_LIMIT = 50;
+/** How far back repair scans. Older pool entries are not worth the round trip. */
+const REPAIR_SCAN_DAYS = 14;
 
 type Candidate = {
   story: MergedStory;
@@ -77,6 +81,21 @@ type Candidate = {
 
 type PrefetchedBody = { status_code: number | null; content: string | null };
 
+/**
+ * What the summarizer actually needs. Kept separate from Candidate so the repair path,
+ * which starts from `articles` rows rather than feed items, uses the same prompt, model
+ * and parsing as the ingest path.
+ */
+type Summarizable = {
+  title: string;
+  publisher: string;
+  /** The category to fall back to if the model's answer is unusable. */
+  hint: NewsCategory;
+  excerpt: string;
+  summary: string | null;
+  category: NewsCategory;
+};
+
 async function handle(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS_HEADERS });
   if (req.method !== "POST") throw new HttpError(405, "Use POST");
@@ -88,6 +107,8 @@ async function handle(req: Request): Promise<Response> {
   const body = await readBody(req);
   const now = new Date();
   const fetchedOn = dayKey(now, POOL_TZ);
+
+  if (body.repair) return await repairSummaries(admin, body.limit ?? REPAIR_LIMIT, started);
 
   const requested = body.categories ?? (await categoriesInUse(admin));
   if (requested.length === 0) {
@@ -198,14 +219,30 @@ async function ingestCategory(
 
   stats.excerpts_enriched += await enrichExcerpts(candidates);
 
-  const usage = await summarize(candidates, category);
+  const rows: Summarizable[] = candidates.map((c) => ({
+    title: c.story.item.title,
+    publisher: c.story.item.publisher,
+    hint: c.story.item.feed.category,
+    excerpt: c.excerpt,
+    summary: null,
+    category,
+  }));
+  const usage = await summarize(rows, category);
   stats.gemini_calls += usage.calls;
   stats.input_tokens += usage.inputTokens;
   stats.output_tokens += usage.outputTokens;
+  candidates.forEach((c, i) => {
+    c.summary = rows[i].summary;
+    c.category = rows[i].category;
+  });
   const moved = candidates.filter((c) => c.category !== category).length;
   stats.recategorized += moved;
 
-  stats.gemini_calls += await embed(candidates);
+  const embedded = await embedAll(
+    candidates.map((c) => `${c.story.item.title}\n\n${c.summary ?? ""}`.trim()),
+  );
+  candidates.forEach((c, i) => (c.embedding = embedded.vectors[i]));
+  stats.gemini_calls += embedded.calls;
 
   const inserted = await upsertArticles(admin, candidates, fetchedOn);
   stats.inserted += inserted;
@@ -229,9 +266,169 @@ async function ingestCategory(
   };
 }
 
-async function readBody(req: Request): Promise<{ categories?: NewsCategory[] }> {
+// ------------------------------------------------------------------- repair
+
+type StaleRow = {
+  id: string;
+  url: string;
+  title: string;
+  summary: string | null;
+  category: string;
+  source: string;
+  url_resolved: boolean;
+};
+
+/** Punctuation- and case-insensitive, so "Title." counts as equal to "Title". */
+function sameText(a: string, b: string): boolean {
+  const norm = (v: string) => v.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return norm(a) === norm(b);
+}
+
+/**
+ * Re-summarize pooled articles whose summary is really just their headline.
+ *
+ * `summarize` falls back to "excerpt, or failing that the title" whenever the model skips
+ * an item or a batch errors, so a title-only summary is the expected scar from a thin feed
+ * or a bad batch — not a one-off. This pass finds them, goes to the page for an
+ * og:description the way ingest now does up front, and runs the same summarizer over the
+ * result. Articles with no usable description are left alone rather than rewritten badly.
+ *
+ * Invoke with `{"repair": true}`. Safe to re-run: it only ever looks at rows that are
+ * still title-only.
+ */
+async function repairSummaries(
+  admin: SupabaseClient,
+  limit: number,
+  started: number,
+): Promise<Response> {
+  const since = new Date(Date.now() - REPAIR_SCAN_DAYS * 86_400_000).toISOString().slice(0, 10);
+
+  const { data, error } = await admin
+    .from("articles")
+    .select("id, url, title, summary, category, source, url_resolved")
+    .gte("fetched_on", since)
+    .order("fetched_on", { ascending: false })
+    .limit(2000);
+  if (error) throw error;
+
+  // The normalised comparison cannot be expressed in PostgREST, so filter here.
+  const stale = ((data ?? []) as StaleRow[])
+    .filter((r) => !r.summary?.trim() || sameText(r.summary, r.title))
+    .slice(0, limit);
+
+  if (stale.length === 0) {
+    return json({ ok: true, repaired: 0, note: "no title-only summaries found" });
+  }
+
+  // Same enrichment the ingest path uses, including the skip rules and 60-char floor.
+  const excerpts: (string | null)[] = [];
+  for (let i = 0; i < stale.length; i += ENRICH_CONCURRENCY) {
+    const batch = stale.slice(i, i + ENRICH_CONCURRENCY);
+    excerpts.push(...(await Promise.all(batch.map((r) => fetchExcerpt(r.url, r.url_resolved)))));
+  }
+
+  const usable = stale
+    .map((row, i) => ({ row, excerpt: excerpts[i] }))
+    .filter((x): x is { row: StaleRow; excerpt: string } => x.excerpt !== null);
+
+  const rows: Summarizable[] = usable.map(({ row, excerpt }) => ({
+    title: row.title,
+    publisher: row.source,
+    hint: isNewsCategory(row.category) ? row.category : "Global Tech",
+    excerpt,
+    summary: null,
+    category: isNewsCategory(row.category) ? row.category : "Global Tech",
+  }));
+
+  const usage = await summarize(rows, "repair");
+
+  // The summary changed, so the vector computed from it is stale too.
+  const embedded = await embedAll(
+    rows.map((r, i) => `${usable[i].row.title}\n\n${r.summary ?? ""}`.trim()),
+  );
+
+  let repaired = 0;
+  let recategorized = 0;
+  let itemsUpdated = 0;
+
+  for (let i = 0; i < usable.length; i++) {
+    const { row } = usable[i];
+    const next = rows[i];
+    // Still title-only after all that? Then the page had nothing to add either.
+    if (!next.summary || sameText(next.summary, row.title)) continue;
+
+    const { error: updateError } = await admin
+      .from("articles")
+      .update({
+        summary: next.summary,
+        category: next.category,
+        embedding: embedded.vectors[i],
+      })
+      .eq("id", row.id);
+    if (updateError) {
+      console.error(`repair failed for ${row.id}`, updateError.message);
+      continue;
+    }
+    repaired++;
+    if (next.category !== row.category) recategorized++;
+
+    // Carry the fix into any digest that already copied the old summary. Only rows that
+    // are still title-only are touched, so an edited or newer copy is left alone.
+    const { data: items } = await admin
+      .from("news_items")
+      .select("id, summary, headline")
+      .eq("url", row.url);
+    for (const item of (items ?? []) as { id: string; summary: string; headline: string }[]) {
+      if (!sameText(item.summary, item.headline)) continue;
+      const { error: itemError } = await admin
+        .from("news_items")
+        .update({ summary: next.summary })
+        .eq("id", item.id);
+      if (!itemError) itemsUpdated++;
+    }
+  }
+
+  if (usage.calls > 0) {
+    await logAiEvent(admin, {
+      userId: null,
+      kind: "summary",
+      itemsProcessed: repaired,
+      inputTokens: usage.inputTokens || null,
+      outputTokens: usage.outputTokens || null,
+    });
+  }
+
+  const runtime_ms = Date.now() - started;
+  console.log(`repair: ${repaired}/${stale.length} re-summarized in ${runtime_ms}ms`);
+  return json({
+    ok: true,
+    runtime_ms,
+    found_stale: stale.length,
+    had_description: usable.length,
+    repaired,
+    recategorized,
+    news_items_updated: itemsUpdated,
+    gemini_calls: usage.calls + embedded.calls,
+    input_tokens: usage.inputTokens,
+    output_tokens: usage.outputTokens,
+    skipped_no_description: stale.length - usable.length,
+  });
+}
+
+async function readBody(
+  req: Request,
+): Promise<{ categories?: NewsCategory[]; repair?: boolean; limit?: number }> {
   try {
-    const raw = (await req.json()) as { category?: unknown; categories?: unknown };
+    const raw = (await req.json()) as {
+      category?: unknown;
+      categories?: unknown;
+      repair?: unknown;
+      limit?: unknown;
+    };
+    if (raw?.repair === true) {
+      const limit = Number(raw.limit);
+      return { repair: true, limit: Number.isFinite(limit) ? limit : undefined };
+    }
     // `category` is what fanout_ingest_news() sends; `categories` is for manual runs.
     if (isNewsCategory(raw?.category)) return { categories: [raw.category] };
     if (Array.isArray(raw?.categories)) {
@@ -360,7 +557,9 @@ async function enrichExcerpts(candidates: Candidate[]): Promise<number> {
   let enriched = 0;
   for (let i = 0; i < thin.length; i += ENRICH_CONCURRENCY) {
     const batch = thin.slice(i, i + ENRICH_CONCURRENCY);
-    const found = await Promise.all(batch.map((c) => fetchExcerpt(c.story.item)));
+    const found = await Promise.all(
+      batch.map((c) => fetchExcerpt(c.story.item.url, c.story.item.resolved)),
+    );
     found.forEach((excerpt, n) => {
       if (excerpt && excerpt.length > batch[n].excerpt.length) {
         batch[n].excerpt = excerpt;
@@ -422,25 +621,24 @@ Pick the single best fit. When a story fits two, prefer the one a reader would l
 under: an Indian company's funding round is "Indian Startups & Tech" even if it moves a
 share price, and an AI model release is "AI" even if announced by a global tech company.`;
 
-/** Fill in `summary` and `category` on each candidate, in batches. Mutates them. */
+/** Fill in `summary` and `category` on each row, in batches. Mutates them. */
 async function summarize(
-  candidates: Candidate[],
-  hint: NewsCategory,
+  rows: Summarizable[],
+  label: string,
 ): Promise<{ calls: number; inputTokens: number; outputTokens: number }> {
   let calls = 0;
   let inputTokens = 0;
   let outputTokens = 0;
 
-  for (let i = 0; i < candidates.length; i += SUMMARY_BATCH) {
-    const batch = candidates.slice(i, i + SUMMARY_BATCH);
+  for (let i = 0; i < rows.length; i += SUMMARY_BATCH) {
+    const batch = rows.slice(i, i + SUMMARY_BATCH);
     const input = batch
-      .map((c, n) => {
-        const s = c.story.item;
-        const excerpt = c.excerpt.trim() || "(no excerpt available)";
+      .map((row, n) => {
+        const excerpt = row.excerpt.trim() || "(no excerpt available)";
         return (
-          `[${n}] title: ${s.title}\n` +
-          `    source: ${s.publisher}\n` +
-          `    feed_category_hint: ${s.feed.category}\n` +
+          `[${n}] title: ${row.title}\n` +
+          `    source: ${row.publisher}\n` +
+          `    feed_category_hint: ${row.hint}\n` +
           `    excerpt: ${excerpt.slice(0, 700)}`
         );
       })
@@ -452,7 +650,7 @@ async function summarize(
       }>({
         model: GEMINI_BULK_MODEL,
         system: SUMMARY_SYSTEM,
-        input: `Feed category being ingested: ${hint}\n\n${input}`,
+        input: `Feed category being ingested: ${label}\n\n${input}`,
         schema: SUMMARY_SCHEMA as unknown as Record<string, unknown>,
       });
       calls++;
@@ -471,36 +669,38 @@ async function summarize(
     } catch (e) {
       // A failed batch is not fatal: those articles keep the feed excerpt and the feed's
       // category, and the pool is still usable today.
-      console.error(`summarize batch failed (${hint})`, e instanceof Error ? e.message : e);
+      console.error(`summarize batch failed (${label})`, e instanceof Error ? e.message : e);
       calls++;
     }
   }
 
   // Anything the model skipped or a failed batch left behind keeps its excerpt.
-  for (const c of candidates) {
-    if (!c.summary) c.summary = c.excerpt.trim().slice(0, 1000) || c.story.item.title;
+  for (const row of rows) {
+    if (!row.summary) row.summary = row.excerpt.trim().slice(0, 1000) || row.title;
   }
   return { calls, inputTokens, outputTokens };
 }
 
-/** Fill in `embedding` on each candidate, in batches. Returns the call count. */
-async function embed(candidates: Candidate[]): Promise<number> {
+/**
+ * Embed in batches. Returns one vector (or null) per input text, in order. Callers pass
+ * title + summary, which is what follow-up matching compares.
+ */
+async function embedAll(texts: string[]): Promise<{ vectors: (number[] | null)[]; calls: number }> {
+  const vectors: (number[] | null)[] = new Array(texts.length).fill(null);
   let calls = 0;
-  for (let i = 0; i < candidates.length; i += MAX_EMBED_BATCH) {
-    const batch = candidates.slice(i, i + MAX_EMBED_BATCH);
-    // Title plus summary is what follow-up matching compares, so embed both.
-    const texts = batch.map((c) => `${c.story.item.title}\n\n${c.summary ?? ""}`.trim());
+  for (let i = 0; i < texts.length; i += MAX_EMBED_BATCH) {
+    const slice = texts.slice(i, i + MAX_EMBED_BATCH);
     try {
-      const vectors = await embedBatch(texts);
+      const got = await embedBatch(slice);
       calls++;
-      batch.forEach((c, n) => (c.embedding = vectors[n] ?? null));
+      got.forEach((v, n) => (vectors[i + n] = v));
     } catch (e) {
       // No embedding means no follow-up linking for these items. Still worth pooling.
       console.error("embed batch failed", e instanceof Error ? e.message : e);
       calls++;
     }
   }
-  return calls;
+  return { vectors, calls };
 }
 
 async function upsertArticles(
