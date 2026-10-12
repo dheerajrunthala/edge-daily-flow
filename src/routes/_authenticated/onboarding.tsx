@@ -4,7 +4,7 @@ import { ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { browserTimezone } from "@/lib/tz";
-import { qk, usePrefs, useProfile } from "@/lib/queries";
+import { CATEGORIES, qk, usePrefs, useProfile } from "@/lib/queries";
 import { Card, Logo } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,6 +28,7 @@ export const Route = createFileRoute("/_authenticated/onboarding")({
 
 const STEPS = ["About you", "Interests", "Email brief"];
 const EXAMPLE = "Software engineer in India interested in AI, backend, and markets";
+const DEFAULT_TIMES = ["08:00", "10:00"];
 
 function Onboarding() {
   const { data: profile } = useProfile();
@@ -41,16 +42,19 @@ function Onboarding() {
   const [cats, setCats] = useState<string[]>([]);
   const [count, setCount] = useState(20);
   const [about, setAbout] = useState(EXAMPLE);
-  const [times, setTimes] = useState<string[]>(["08:00", "10:00"]);
+  const [times, setTimes] = useState<string[]>(DEFAULT_TIMES);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    if (ready || !profile || !prefs) return;
-    setName(profile.full_name ?? "");
+    // Seed from the rows handle_new_user created, but still render if either is missing —
+    // gating on both meant a user with no profile row sat on the spinner with no way out.
+    if (ready || (!profile && !prefs)) return;
+    setName(profile?.full_name ?? "");
     setTz(browserTimezone());
-    setCats(prefs.categories);
-    setCount(prefs.headline_count);
-    setTimes(prefs.email_times.length ? prefs.email_times : ["08:00", "10:00"]);
+    setAbout(profile?.news_profile ?? EXAMPLE);
+    setCats(prefs?.categories ?? CATEGORIES.slice(0, 4));
+    setCount(prefs?.headline_count ?? 20);
+    setTimes(prefs?.email_times?.length ? prefs.email_times : DEFAULT_TIMES);
     setReady(true);
   }, [profile, prefs, ready]);
 
@@ -61,13 +65,25 @@ function Onboarding() {
       const id = data.user!.id;
       const p = await supabase
         .from("profiles")
-        .update({ full_name: name.trim() || null, timezone: tz, news_profile: about.trim() || null, onboarded_at: new Date().toISOString() })
-        .eq("id", id);
+        .update({
+          full_name: name.trim() || null,
+          timezone: tz,
+          news_profile: about.trim() || null,
+          onboarded_at: new Date().toISOString(),
+        })
+        .eq("id", id)
+        .select("id");
       if (p.error) throw p.error;
-      const n = await supabase
-        .from("news_prefs")
-        .update({ categories: cats, headline_count: count, email_times: [...times].sort() })
-        .eq("user_id", id);
+      // An update that matched nothing leaves onboarded_at null, and the route guard would
+      // bounce the user straight back here — say so instead of looping silently.
+      if (!p.data?.length)
+        throw new Error("Your profile could not be found. Please sign out and in again.");
+      const n = await supabase.from("news_prefs").upsert({
+        user_id: id,
+        categories: cats,
+        headline_count: count,
+        email_times: [...times].sort(),
+      });
       if (n.error) throw n.error;
       await qc.invalidateQueries({ queryKey: qk.profile });
       await qc.invalidateQueries({ queryKey: qk.prefs });
@@ -86,8 +102,15 @@ function Onboarding() {
       <div className="mb-6 flex w-full max-w-lg items-center gap-2">
         {STEPS.map((s, i) => (
           <div key={s} className="flex-1">
-            <div className={cn("h-1 rounded-full transition-calm", i <= step ? "bg-primary" : "bg-muted")} />
-            <p className={cn("mt-2 text-xs", i === step ? "font-medium" : "text-muted-foreground")}>{s}</p>
+            <div
+              className={cn(
+                "h-1 rounded-full transition-calm",
+                i <= step ? "bg-primary" : "bg-muted",
+              )}
+            />
+            <p className={cn("mt-2 text-xs", i === step ? "font-medium" : "text-muted-foreground")}>
+              {s}
+            </p>
           </div>
         ))}
       </div>
@@ -100,11 +123,19 @@ function Onboarding() {
           <div className="space-y-5">
             <div>
               <h1 className="text-xl font-semibold">Welcome. What should we call you?</h1>
-              <p className="mt-1 text-sm text-muted-foreground">Dates and email times use your timezone.</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Dates and email times use your timezone.
+              </p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="name">Name</Label>
-              <Input id="name" value={name} onChange={(e) => setName(e.target.value)} className="h-11 rounded-xl" autoFocus />
+              <Input
+                id="name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="h-11 rounded-xl"
+                autoFocus
+              />
             </div>
             <div className="space-y-2">
               <Label>Timezone</Label>
@@ -126,7 +157,13 @@ function Onboarding() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="about">About you</Label>
-              <Textarea id="about" rows={3} value={about} onChange={(e) => setAbout(e.target.value)} className="rounded-xl" />
+              <Textarea
+                id="about"
+                rows={3}
+                value={about}
+                onChange={(e) => setAbout(e.target.value)}
+                className="rounded-xl"
+              />
               <p className="text-xs text-muted-foreground">Helps AI rank stories for you.</p>
             </div>
           </div>
@@ -134,18 +171,29 @@ function Onboarding() {
           <div className="space-y-5">
             <div>
               <h1 className="text-xl font-semibold">When should your brief arrive?</h1>
-              <p className="mt-1 text-sm text-muted-foreground">We'll email your tasks and top stories at these times.</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                We'll email your tasks and top stories at these times.
+              </p>
             </div>
             <EmailTimes value={times} onChange={setTimes} tz={tz} />
           </div>
         )}
 
         <div className="mt-8 flex justify-between">
-          <Button variant="ghost" className="h-11 rounded-xl" disabled={step === 0} onClick={() => setStep(step - 1)}>
+          <Button
+            variant="ghost"
+            className="h-11 rounded-xl"
+            disabled={step === 0}
+            onClick={() => setStep(step - 1)}
+          >
             <ArrowLeft /> Back
           </Button>
           {step < 2 ? (
-            <Button className="h-11 rounded-xl" disabled={!canNext} onClick={() => setStep(step + 1)}>
+            <Button
+              className="h-11 rounded-xl"
+              disabled={!canNext}
+              onClick={() => setStep(step + 1)}
+            >
               Continue <ArrowRight />
             </Button>
           ) : (

@@ -1,7 +1,7 @@
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import type { Tables, TablesInsert, TablesUpdate } from "@/integrations/supabase/types";
-import { nextOccurrence, type Task } from "./task-logic";
+import { nextOccurrenceAhead, type Task } from "./task-logic";
 import { toast } from "sonner";
 
 export type Profile = Tables<"profiles">;
@@ -35,7 +35,11 @@ export const profileQuery = () =>
     queryKey: qk.profile,
     queryFn: async () => {
       const id = await uid();
-      const { data, error } = await supabase.from("profiles").select("*").eq("id", id).maybeSingle();
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", id)
+        .maybeSingle();
       if (error) throw error;
       return data;
     },
@@ -49,7 +53,11 @@ export const usePrefs = () =>
     queryKey: qk.prefs,
     queryFn: async () => {
       const id = await uid();
-      const { data, error } = await supabase.from("news_prefs").select("*").eq("user_id", id).maybeSingle();
+      const { data, error } = await supabase
+        .from("news_prefs")
+        .select("*")
+        .eq("user_id", id)
+        .maybeSingle();
       if (error) throw error;
       return data;
     },
@@ -124,7 +132,11 @@ export const useSavedItems = () =>
   });
 
 export async function fetchNewsItem(id: string) {
-  const { data, error } = await supabase.from("news_items").select(NEWS_COLS).eq("id", id).maybeSingle();
+  const { data, error } = await supabase
+    .from("news_items")
+    .select(NEWS_COLS)
+    .eq("id", id)
+    .maybeSingle();
   if (error) throw error;
   return data as NewsItem | null;
 }
@@ -219,8 +231,17 @@ export function useToggleTask(tz: string) {
   return useMutation({
     mutationFn: async (task: Task) => {
       if (task.status === "done") {
-        const { error } = await supabase.from("tasks").update({ status: "todo", completed_at: null }).eq("id", task.id);
+        const { error } = await supabase
+          .from("tasks")
+          .update({ status: "todo", completed_at: null })
+          .eq("id", task.id);
         if (error) throw error;
+        // Drop the logged completion too, or Insights keeps counting a task that is open again.
+        const { error: delErr } = await supabase
+          .from("task_completions")
+          .delete()
+          .eq("task_id", task.id);
+        if (delErr) throw delErr;
         return;
       }
       if (task.recurrence !== "none" && task.due_at) {
@@ -230,16 +251,25 @@ export function useToggleTask(tz: string) {
         if (e1) throw e1;
         const { error: e2 } = await supabase
           .from("tasks")
-          .update({ due_at: nextOccurrence(task.due_at, task.recurrence, tz), last_reminded_at: null })
+          .update({
+            due_at: nextOccurrenceAhead(task.due_at, task.recurrence, tz, task.all_day),
+            last_reminded_at: null,
+          })
           .eq("id", task.id);
         if (e2) throw e2;
         return;
       }
       const now = new Date().toISOString();
-      const { error } = await supabase.from("tasks").update({ status: "done", completed_at: now }).eq("id", task.id);
+      const { error } = await supabase
+        .from("tasks")
+        .update({ status: "done", completed_at: now })
+        .eq("id", task.id);
       if (error) throw error;
       // Log one-off completions too, so insights reflect them
-      await supabase.from("task_completions").insert({ task_id: task.id, due_at: task.due_at, completed_at: now });
+      const { error: logErr } = await supabase
+        .from("task_completions")
+        .insert({ task_id: task.id, due_at: task.due_at, completed_at: now });
+      if (logErr) throw logErr;
     },
     onMutate: async (task) => {
       await qc.cancelQueries({ queryKey: qk.tasks });
@@ -249,7 +279,7 @@ export function useToggleTask(tz: string) {
           if (t.id !== task.id) return t;
           if (t.status === "done") return { ...t, status: "todo", completed_at: null };
           if (t.recurrence !== "none" && t.due_at)
-            return { ...t, due_at: nextOccurrence(t.due_at, t.recurrence, tz) };
+            return { ...t, due_at: nextOccurrenceAhead(t.due_at, t.recurrence, tz, t.all_day) };
           return { ...t, status: "done", completed_at: new Date().toISOString() };
         }),
       );
@@ -260,7 +290,8 @@ export function useToggleTask(tz: string) {
       toast.error(e.message);
     },
     onSuccess: (_d, task) => {
-      if (task.recurrence !== "none" && task.status !== "done") toast.success("Done — next one scheduled");
+      if (task.recurrence !== "none" && task.status !== "done")
+        toast.success("Done — next one scheduled");
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: qk.tasks });
@@ -291,7 +322,10 @@ export function useTagMutations() {
       if (error) throw error;
       if (name !== tag.name) {
         // Keep task tag arrays in sync with the rename
-        const { data: rows } = await supabase.from("tasks").select("id,tags").contains("tags", [tag.name]);
+        const { data: rows } = await supabase
+          .from("tasks")
+          .select("id,tags")
+          .contains("tags", [tag.name]);
         for (const r of rows ?? []) {
           await supabase
             .from("tasks")
@@ -307,9 +341,15 @@ export function useTagMutations() {
     mutationFn: async (tag: Tag) => {
       const { error } = await supabase.from("tags").delete().eq("id", tag.id);
       if (error) throw error;
-      const { data: rows } = await supabase.from("tasks").select("id,tags").contains("tags", [tag.name]);
+      const { data: rows } = await supabase
+        .from("tasks")
+        .select("id,tags")
+        .contains("tags", [tag.name]);
       for (const r of rows ?? []) {
-        await supabase.from("tasks").update({ tags: r.tags.filter((x: string) => x !== tag.name) }).eq("id", r.id);
+        await supabase
+          .from("tasks")
+          .update({ tags: r.tags.filter((x: string) => x !== tag.name) })
+          .eq("id", r.id);
       }
     },
     onSuccess: done,
@@ -322,7 +362,10 @@ export function useToggleSaved() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (item: NewsItem) => {
-      const { error } = await supabase.from("news_items").update({ is_saved: !item.is_saved }).eq("id", item.id);
+      const { error } = await supabase
+        .from("news_items")
+        .update({ is_saved: !item.is_saved })
+        .eq("id", item.id);
       if (error) throw error;
     },
     onMutate: async (item) => {

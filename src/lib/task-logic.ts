@@ -16,7 +16,9 @@ export function nextOccurrence(dueAt: string, recurrence: Recurrence, tz: string
   if (recurrence === "monthly" || recurrence === "yearly") {
     // Clamp to the last day of the target month (Jan 31 -> Feb 28)
     const norm = new Date(Date.UTC(y, m - 1, 1));
-    const lastDay = new Date(Date.UTC(norm.getUTCFullYear(), norm.getUTCMonth() + 1, 0)).getUTCDate();
+    const lastDay = new Date(
+      Date.UTC(norm.getUTCFullYear(), norm.getUTCMonth() + 1, 0),
+    ).getUTCDate();
     y = norm.getUTCFullYear();
     m = norm.getUTCMonth() + 1;
     d = Math.min(d, lastDay);
@@ -29,9 +31,39 @@ export function nextOccurrence(dueAt: string, recurrence: Recurrence, tz: string
   return zonedToUtc(y, m, d, p.h, p.min, tz).toISOString();
 }
 
+/**
+ * Where a recurring task should land after it's completed: the first occurrence that is
+ * still ahead. Stepping once isn't enough — a daily task left for a week would roll from
+ * "5 days overdue" to "4 days overdue" and need completing five times to catch up.
+ */
+export function nextOccurrenceAhead(
+  dueAt: string,
+  recurrence: Recurrence,
+  tz: string,
+  allDay = false,
+  now = new Date(),
+): string | null {
+  let next = nextOccurrence(dueAt, recurrence, tz);
+  if (!next) return null;
+  const today = dayKey(now, tz);
+  // Daily tasks can be years behind; cap the walk so a bad row can't spin forever.
+  for (let i = 0; i < 400; i++) {
+    const ahead = allDay ? dayKey(next!, tz) > today : new Date(next!) > now;
+    if (ahead) break;
+    const step = nextOccurrence(next!, recurrence, tz);
+    if (!step) break;
+    next = step;
+  }
+  return next;
+}
+
 export type Group = "overdue" | "today" | "upcoming" | "someday";
 
-export function taskGroup(task: Pick<Task, "due_at" | "all_day">, tz: string, now = new Date()): Group {
+export function taskGroup(
+  task: Pick<Task, "due_at" | "all_day">,
+  tz: string,
+  now = new Date(),
+): Group {
   if (!task.due_at) return "someday";
   const today = dayKey(now, tz);
   const k = dayKey(task.due_at, tz);
