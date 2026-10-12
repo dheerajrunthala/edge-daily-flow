@@ -95,6 +95,41 @@ export type Database = {
         }
         Relationships: []
       }
+      brief_sends: {
+        Row: {
+          created_at: string
+          digest_id: string | null
+          id: string
+          sent_for: string
+          slot: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          digest_id?: string | null
+          id?: string
+          sent_for: string
+          slot: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          digest_id?: string | null
+          id?: string
+          sent_for?: string
+          slot?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "brief_sends_digest_id_fkey"
+            columns: ["digest_id"]
+            isOneToOne: false
+            referencedRelation: "digests"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       digests: {
         Row: {
           created_at: string
@@ -236,6 +271,72 @@ export type Database = {
         }
         Relationships: []
       }
+      notification_prefs: {
+        Row: {
+          channels: Database["public"]["Enums"]["notification_channel"][]
+          created_at: string
+          nag_interval: string
+          quiet_end: string
+          quiet_start: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          channels?: Database["public"]["Enums"]["notification_channel"][]
+          created_at?: string
+          nag_interval?: string
+          quiet_end?: string
+          quiet_start?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          channels?: Database["public"]["Enums"]["notification_channel"][]
+          created_at?: string
+          nag_interval?: string
+          quiet_end?: string
+          quiet_start?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      prefetch_feeds: {
+        Row: {
+          name: string
+          updated_at: string
+          url: string
+        }
+        Insert: {
+          name: string
+          updated_at?: string
+          url: string
+        }
+        Update: {
+          name?: string
+          updated_at?: string
+          url?: string
+        }
+        Relationships: []
+      }
+      prefetch_requests: {
+        Row: {
+          request_id: number
+          requested_at: string
+          url: string
+        }
+        Insert: {
+          request_id: number
+          requested_at?: string
+          url: string
+        }
+        Update: {
+          request_id?: number
+          requested_at?: string
+          url?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           created_at: string
@@ -322,6 +423,47 @@ export type Database = {
           },
         ]
       }
+      task_notifications: {
+        Row: {
+          channel: Database["public"]["Enums"]["notification_channel"]
+          delivered: boolean
+          due_at: string
+          id: string
+          sent_at: string
+          stage: string
+          task_id: string
+          user_id: string
+        }
+        Insert: {
+          channel: Database["public"]["Enums"]["notification_channel"]
+          delivered?: boolean
+          due_at: string
+          id?: string
+          sent_at?: string
+          stage: string
+          task_id: string
+          user_id: string
+        }
+        Update: {
+          channel?: Database["public"]["Enums"]["notification_channel"]
+          delivered?: boolean
+          due_at?: string
+          id?: string
+          sent_at?: string
+          stage?: string
+          task_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "task_notifications_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tasks: {
         Row: {
           all_day: boolean
@@ -334,6 +476,7 @@ export type Database = {
           priority: Database["public"]["Enums"]["task_priority"]
           recurrence: Database["public"]["Enums"]["task_recurrence"]
           remind_before: string | null
+          snoozed_until: string | null
           source: string
           status: Database["public"]["Enums"]["task_status"]
           tags: string[]
@@ -352,6 +495,7 @@ export type Database = {
           priority?: Database["public"]["Enums"]["task_priority"]
           recurrence?: Database["public"]["Enums"]["task_recurrence"]
           remind_before?: string | null
+          snoozed_until?: string | null
           source?: string
           status?: Database["public"]["Enums"]["task_status"]
           tags?: string[]
@@ -370,10 +514,41 @@ export type Database = {
           priority?: Database["public"]["Enums"]["task_priority"]
           recurrence?: Database["public"]["Enums"]["task_recurrence"]
           remind_before?: string | null
+          snoozed_until?: string | null
           source?: string
           status?: Database["public"]["Enums"]["task_status"]
           tags?: string[]
           title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      telegram_links: {
+        Row: {
+          chat_id: number | null
+          code: string | null
+          code_expires_at: string | null
+          created_at: string
+          linked_at: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          chat_id?: number | null
+          code?: string | null
+          code_expires_at?: string | null
+          created_at?: string
+          linked_at?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          chat_id?: number | null
+          code?: string | null
+          code_expires_at?: string | null
+          created_at?: string
+          linked_at?: string | null
           updated_at?: string
           user_id?: string
         }
@@ -384,10 +559,32 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      fanout_ingest_news: { Args: never; Returns: number }
+      get_prefetched_feeds: {
+        Args: { p_max_age?: string }
+        Returns: {
+          content: string
+          status_code: number
+          url: string
+        }[]
+      }
+      invoke_edge_function: {
+        Args: { p_body?: Json; p_name: string }
+        Returns: number
+      }
+      prefetch_aggregator_feeds: { Args: never; Returns: number }
+      request_telegram_link: {
+        Args: never
+        Returns: {
+          code: string
+          expires_at: string
+        }[]
+      }
+      unlink_telegram: { Args: never; Returns: undefined }
     }
     Enums: {
       digest_status: "pending" | "ready" | "failed"
+      notification_channel: "email" | "push" | "telegram"
       task_priority: "low" | "medium" | "high"
       task_recurrence: "none" | "daily" | "weekly" | "monthly" | "yearly"
       task_status: "todo" | "done"
@@ -519,6 +716,7 @@ export const Constants = {
   public: {
     Enums: {
       digest_status: ["pending", "ready", "failed"],
+      notification_channel: ["email", "push", "telegram"],
       task_priority: ["low", "medium", "high"],
       task_recurrence: ["none", "daily", "weekly", "monthly", "yearly"],
       task_status: ["todo", "done"],

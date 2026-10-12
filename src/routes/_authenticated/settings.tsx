@@ -4,6 +4,7 @@ import { Loader2, LogOut, Monitor, Moon, Sun, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell, useSignOut } from "@/components/app-shell";
 import { Card, ListSkeleton, PageHeader, TagChip } from "@/components/common";
+import { NotificationSettings } from "@/components/notification-settings";
 import { CategoryPicker, EmailTimes, Segmented, TimezoneSelect } from "@/components/pref-controls";
 import { ColorPicker } from "@/components/task-form";
 import {
@@ -186,6 +187,12 @@ function SettingsPage() {
                 tz={profile.timezone}
                 onChange={(t) => upPrefs.mutate({ email_times: [...t].sort() })}
               />
+            </Section>
+            <Section
+              title="Reminders"
+              hint={`Where task reminders go, and when to stay quiet. Times are in ${profile.timezone.replace(/_/g, " ")}.`}
+            >
+              <NotificationSettings />
             </Section>
             <Button variant="outline" className="h-11 w-full rounded-xl" onClick={signOut}>
               <LogOut /> Sign out

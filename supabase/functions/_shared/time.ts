@@ -80,3 +80,53 @@ export function isValidTimezone(tz: string): boolean {
     return false;
   }
 }
+
+/**
+ * Postgres interval text to milliseconds. PostgREST renders an interval either as
+ * "HH:MM:SS" or as "N days" / "N days HH:MM:SS" depending on the value, which is why
+ * both shapes are handled here. Used for tasks.remind_before and
+ * notification_prefs.nag_interval.
+ */
+export function intervalMs(value: string | null): number | null {
+  if (!value) return null;
+  let ms = 0;
+  let matched = false;
+
+  const days = /(-?\d+)\s+days?/.exec(value);
+  if (days) {
+    ms += Number(days[1]) * 86_400_000;
+    matched = true;
+  }
+  const clock = /(\d{1,2}):(\d{2}):(\d{2})/.exec(value);
+  if (clock) {
+    ms += (Number(clock[1]) * 3600 + Number(clock[2]) * 60 + Number(clock[3])) * 1000;
+    matched = true;
+  }
+  const hours = /(-?\d+)\s+hours?/.exec(value);
+  if (!clock && hours) {
+    ms += Number(hours[1]) * 3_600_000;
+    matched = true;
+  }
+  const mins = /(-?\d+)\s+mins?(?:utes?)?/.exec(value);
+  if (!clock && mins) {
+    ms += Number(mins[1]) * 60_000;
+    matched = true;
+  }
+  return matched ? ms : null;
+}
+
+/** Minutes since midnight as seen in tz — the unit quiet hours are compared in. */
+export function minutesOfDay(date: Date, tz: string): number {
+  const p = partsInTz(date, tz);
+  return p.h * 60 + p.min;
+}
+
+/** "HH:MM" or "HH:MM:SS" (Postgres `time`) to minutes since midnight. */
+export function clockToMinutes(value: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})/.exec(value.trim());
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  return h * 60 + min;
+}

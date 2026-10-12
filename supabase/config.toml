@@ -19,3 +19,10 @@ verify_jwt = false
 
 [functions.check-reminders]
 verify_jwt = false
+
+# telegram-webhook is called by Telegram's servers, which send no JWT. It authenticates
+# the request against TELEGRAM_WEBHOOK_SECRET (echoed back in the
+# x-telegram-bot-api-secret-token header) and the user by chat_id, so the platform gate
+# would only block the one caller that is supposed to reach it.
+[functions.telegram-webhook]
+verify_jwt = false

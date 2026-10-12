@@ -1,9 +1,20 @@
-// check-reminders — a short email when a task's reminder comes due. Cron every 15 min.
+// check-reminders — the task escalation. Cron every minute.
 //
-// A task is due for a reminder when `due_at - remind_before <= now()`, it is still todo,
-// and it has not already been reminded *for this occurrence*. That last part is what
-// last_reminded_at is for: recurring tasks roll due_at forward on completion, so a
-// timestamp older than the current due_at means "reminded for a previous occurrence".
+// A task that opted into reminders (remind_before is set) walks a ladder of stages:
+//
+//   lead    the user's own remind_before
+//   1h      one hour out
+//   15m     fifteen minutes out
+//   due     the moment it is due
+//   nag:k   every nag_interval after that, while it is still open
+//
+// Each stage fires at most once per occurrence per channel, and that is enforced by rows
+// in task_notifications rather than by timing: the row is claimed *before* the send, so
+// two overlapping ticks cannot both notify, and deleted again if the send fails so the
+// next tick retries. A recurring task rolling due_at forward starts a fresh ladder for
+// free, because the ledger is keyed on due_at.
+//
+// Delivery itself (which channels, quiet hours) belongs to _shared/notify.ts.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
@@ -15,29 +26,39 @@ import {
   json,
   serviceClient,
 } from "../_shared/supabase.ts";
-import { S, escapeHtml, sendMail, wrap } from "../_shared/email.ts";
-import { isValidTimezone } from "../_shared/time.ts";
+import {
+  activeChannels,
+  loadRecipient,
+  notify,
+  type Channel,
+  type NotifyPayload,
+  type Recipient,
+} from "../_shared/notify.ts";
+import { TASK_COLUMNS, describeDue, describeGap, type TaskRow } from "../_shared/tasks.ts";
+import { intervalMs } from "../_shared/time.ts";
 
-const DEFAULT_TZ = "Asia/Kolkata";
 /**
- * Don't email about something that came due long ago — if the function was down for a
- * day, the user wants their tasks, not a backlog of stale alarms.
+ * Don't deliver a fixed stage that came due long ago — if the function was down for a day
+ * the user wants their current tasks, not a backlog of stale alarms. Nags are exempt: the
+ * nag index is derived from now, so the one that fires is always the current one.
  */
 const MAX_LATENESS_HOURS = 6;
-/** Per-user cap per tick, so one over-scheduled day cannot become twenty emails. */
+/**
+ * Safety rails on "nag until it's done". Unbounded nagging across every channel is how a
+ * reminder app becomes something you mute: stop after two days or 24 pings, whichever
+ * comes first, and let the daily brief carry it from there.
+ */
+const NAG_WINDOW_HOURS = 48;
+const MAX_NAGS = 24;
+/** Per-user cap per tick, so one over-scheduled hour cannot become twenty emails. */
 const MAX_PER_USER = 5;
+/** Enough to cover every task that could have a stage due this minute. */
+const CANDIDATE_LIMIT = 500;
 
-type TaskRow = {
-  id: string;
-  user_id: string;
-  title: string;
-  notes: string | null;
-  due_at: string;
-  all_day: boolean;
-  priority: string;
-  remind_before: string | null;
-  last_reminded_at: string | null;
-};
+/** Postgres unique violation — a stage another tick already claimed. */
+const UNIQUE_VIOLATION = "23505";
+
+type Stage = { stage: string; fireAt: number };
 
 async function handle(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS_HEADERS });
@@ -49,38 +70,53 @@ async function handle(req: Request): Promise<Response> {
   const body = await readBody(req);
   const now = new Date();
 
-  const due = await dueReminders(admin, now, body.user_id);
-  if (due.length === 0) {
-    return json({ ok: true, runtime_ms: Date.now() - started, sent: 0, due: 0 });
+  const candidates = await candidateTasks(admin, now, body.user_id);
+  if (candidates.length === 0) {
+    return json({ ok: true, runtime_ms: Date.now() - started, notified: 0, candidates: 0 });
   }
 
-  // Group by user so one person's burst stays inside MAX_PER_USER and we look their
-  // email and timezone up once.
+  // Group by user: the recipient lookup, the quiet-hours check and MAX_PER_USER are all
+  // per person, not per task.
   const byUser = new Map<string, TaskRow[]>();
-  for (const task of due) {
+  for (const task of candidates) {
     const list = byUser.get(task.user_id);
     if (list) list.push(task);
     else byUser.set(task.user_id, [task]);
   }
 
-  let sent = 0;
+  let notified = 0;
   const report: Record<string, unknown>[] = [];
 
   for (const [userId, tasks] of byUser) {
     try {
-      const { email, timezone } = await recipient(admin, userId);
-      for (const task of tasks.slice(0, MAX_PER_USER)) {
-        const built = buildReminder(task, timezone);
-        await sendMail({ to: email, subject: built.subject, html: built.html, text: built.text });
-        // Stamp only after the send succeeds, so a failure is retried next tick.
-        const { error } = await admin
-          .from("tasks")
-          .update({ last_reminded_at: new Date().toISOString() })
-          .eq("id", task.id);
-        if (error) throw error;
-        sent++;
+      const recipient = await loadRecipient(admin, userId);
+      const { channels, skipped } = activeChannels(recipient, now);
+
+      if (channels.length === 0) {
+        // Nothing is claimed, so every stage still pending resumes once the user's quiet
+        // hours end — minus anything the lateness horizon has by then dropped.
+        report.push({
+          user_id: userId,
+          status: "no active channels",
+          reasons: skipped.map((s) => `${s.channel}: ${s.reason}`),
+        });
+        continue;
       }
-      report.push({ user_id: userId, reminded: Math.min(tasks.length, MAX_PER_USER) });
+
+      let userNotified = 0;
+      for (const task of tasks) {
+        if (userNotified >= MAX_PER_USER) {
+          report.push({ user_id: userId, task_id: task.id, status: "capped" });
+          break;
+        }
+        const outcome = await escalate(admin, recipient, task, channels, now);
+        if (!outcome) continue;
+        if (outcome.delivered) {
+          userNotified++;
+          notified++;
+        }
+        report.push({ user_id: userId, task_id: task.id, ...outcome });
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       console.error(`check-reminders failed for ${userId}`, message);
@@ -89,8 +125,12 @@ async function handle(req: Request): Promise<Response> {
   }
 
   const runtime_ms = Date.now() - started;
-  console.log(`check-reminders: ${sent} sent in ${runtime_ms}ms`);
-  return json({ ok: true, runtime_ms, sent, due: due.length, users: report });
+  if (notified > 0 || report.length > 0) {
+    console.log(
+      `check-reminders: ${notified} notified from ${candidates.length} candidates in ${runtime_ms}ms`,
+    );
+  }
+  return json({ ok: true, runtime_ms, notified, candidates: candidates.length, detail: report });
 }
 
 async function readBody(req: Request): Promise<{ user_id?: string }> {
@@ -103,135 +143,238 @@ async function readBody(req: Request): Promise<{ user_id?: string }> {
 }
 
 /**
- * Tasks whose reminder has come due. `remind_before` is an interval, so the comparison
- * has to happen in Postgres — hence the RPC-free filter here plus the final check in JS
- * for the per-occurrence condition, which PostgREST cannot express.
+ * Tasks that could have a stage due this minute: still open, opted into reminders, and
+ * with a due_at inside the window the ladder can reach. The exact stage arithmetic needs
+ * the interval in milliseconds and the per-user nag cadence, so it happens in JS.
  */
-async function dueReminders(
+async function candidateTasks(
   admin: SupabaseClient,
   now: Date,
   onlyUser?: string,
 ): Promise<TaskRow[]> {
-  const horizon = new Date(now.getTime() - MAX_LATENESS_HOURS * 3_600_000);
-
   let query = admin
     .from("tasks")
-    .select("id, user_id, title, notes, due_at, all_day, priority, remind_before, last_reminded_at")
+    .select(TASK_COLUMNS)
     .eq("status", "todo")
     .not("remind_before", "is", null)
     .not("due_at", "is", null)
-    // Cheap bound: anything whose due_at is already far past is out of scope, and
-    // anything more than a few days out cannot be due yet for any sane remind_before.
-    .gte("due_at", horizon.toISOString())
+    // Overdue far enough that nagging has stopped, or far enough out that no stage can
+    // have fired yet (the longest remind_before the UI offers is 3 days).
+    .gte("due_at", new Date(now.getTime() - NAG_WINDOW_HOURS * 3_600_000).toISOString())
     .lte("due_at", new Date(now.getTime() + 8 * 86_400_000).toISOString())
     .order("due_at", { ascending: true })
-    .limit(200);
+    .limit(CANDIDATE_LIMIT);
   if (onlyUser) query = query.eq("user_id", onlyUser);
 
   const { data, error } = await query;
   if (error) throw error;
-
-  return ((data ?? []) as TaskRow[]).filter((task) => {
-    const dueAt = new Date(task.due_at).getTime();
-    const lead = parseInterval(task.remind_before);
-    if (lead === null) return false;
-
-    const fireAt = dueAt - lead;
-    if (fireAt > now.getTime()) return false; // not yet
-    if (fireAt < horizon.getTime()) return false; // too late to be useful
-
-    // Already reminded for this occurrence? last_reminded_at is reset implicitly by the
-    // recurrence roll-forward moving due_at past it.
-    if (task.last_reminded_at && new Date(task.last_reminded_at).getTime() >= fireAt) {
-      return false;
-    }
-    return true;
-  });
+  return (data ?? []) as TaskRow[];
 }
 
 /**
- * Postgres interval text to milliseconds. PostgREST renders `remind_before` either as
- * "HH:MM:SS" or as "N days" / "N days HH:MM:SS" depending on the value, which is why
- * both shapes are handled here.
+ * The full ladder for one occurrence, in fire order.
+ *
+ * An all-day task gets only its lead stage: its due_at is local midnight, so escalating
+ * through "due now" and then nagging would mean a birthday pinging you from midnight on.
  */
-export function parseInterval(value: string | null): number | null {
-  if (!value) return null;
-  let ms = 0;
-  let matched = false;
+export function plan(task: TaskRow, nagMs: number, now: Date): Stage[] {
+  const due = new Date(task.due_at!).getTime();
+  const lead = intervalMs(task.remind_before);
 
-  const days = /(-?\d+)\s+days?/.exec(value);
-  if (days) {
-    ms += Number(days[1]) * 86_400_000;
-    matched = true;
+  // Keyed by fire time so stages that coincide collapse into one send: with
+  // remind_before = 1 hour, 'lead' and '1h' are the same instant and the user should get
+  // one notification, not two. Insertion order decides the winner, so lead goes first.
+  const slots = new Map<number, string>();
+  const put = (fireAt: number, stage: string) => {
+    if (!slots.has(fireAt)) slots.set(fireAt, stage);
+  };
+
+  if (lead !== null && lead > 0) put(due - lead, "lead");
+
+  if (!task.all_day) {
+    put(due - 3_600_000, "1h");
+    put(due - 900_000, "15m");
+    put(due, "due");
+
+    const overdue = now.getTime() - due;
+    if (overdue > 0 && nagMs > 0 && overdue <= NAG_WINDOW_HOURS * 3_600_000) {
+      // Only the current nag matters — the ones before it have been superseded, and
+      // deriving the index from now is what keeps a late tick from replaying them.
+      const k = Math.floor(overdue / nagMs);
+      if (k >= 1 && k <= MAX_NAGS) put(due + k * nagMs, `nag:${k}`);
+    }
   }
-  const clock = /(\d{1,2}):(\d{2}):(\d{2})/.exec(value);
-  if (clock) {
-    ms += (Number(clock[1]) * 3600 + Number(clock[2]) * 60 + Number(clock[3])) * 1000;
-    matched = true;
-  }
-  const hours = /(-?\d+)\s+hours?/.exec(value);
-  if (!clock && hours) {
-    ms += Number(hours[1]) * 3_600_000;
-    matched = true;
-  }
-  const mins = /(-?\d+)\s+mins?(?:utes?)?/.exec(value);
-  if (!clock && mins) {
-    ms += Number(mins[1]) * 60_000;
-    matched = true;
-  }
-  return matched ? ms : null;
+
+  return [...slots.entries()]
+    .map(([fireAt, stage]) => ({ fireAt, stage }))
+    .sort((a, b) => a.fireAt - b.fireAt);
 }
 
-async function recipient(
+/** Stages that have come due, are not too stale to be worth sending, and are not snoozed past. */
+function pendingStages(task: TaskRow, stages: Stage[], now: Date): Stage[] {
+  const t = now.getTime();
+  // A stage from before the task existed never applies: creating a task due in five
+  // minutes must not fire "due in 1 hour" on the spot.
+  let floor = new Date(task.created_at).getTime();
+  // Snoozing permanently retires every stage before the snooze expiry, so the ladder
+  // resumes at the current nag instead of replaying what it slept through.
+  if (task.snoozed_until) {
+    floor = Math.max(floor, new Date(task.snoozed_until).getTime());
+  }
+  const lateFloor = t - MAX_LATENESS_HOURS * 3_600_000;
+
+  return stages.filter((s) => {
+    if (s.fireAt > t || s.fireAt < floor) return false;
+    // Nags are exempt from the lateness horizon: plan() only ever emits the current one.
+    if (s.stage.startsWith("nag:")) return true;
+    return s.fireAt >= lateFloor;
+  });
+}
+
+type Outcome = {
+  stage: string;
+  delivered: boolean;
+  channels?: string[];
+  superseded?: string[];
+  status?: string;
+};
+
+/**
+ * Advance one task by at most one notification. When several stages are pending (the
+ * function was down, or the user was asleep until the lateness horizon caught up) only
+ * the latest is sent; the older ones are written to the ledger as `delivered = false` so
+ * they are accounted for without claiming an email went out, and never fire late.
+ */
+async function escalate(
   admin: SupabaseClient,
-  userId: string,
-): Promise<{ email: string; timezone: string }> {
-  const { data: userData, error } = await admin.auth.admin.getUserById(userId);
-  if (error || !userData.user?.email) throw new Error(`no auth email for ${userId}`);
+  recipient: Recipient,
+  task: TaskRow,
+  channels: Channel[],
+  now: Date,
+): Promise<Outcome | null> {
+  if (task.snoozed_until && new Date(task.snoozed_until) > now) return null;
 
-  const { data: profile } = await admin
-    .from("profiles")
-    .select("timezone")
-    .eq("id", userId)
-    .maybeSingle();
-  const tz = profile?.timezone && isValidTimezone(profile.timezone) ? profile.timezone : DEFAULT_TZ;
-  return { email: userData.user.email, timezone: tz };
-}
+  const stages = plan(task, recipient.prefs.nagIntervalMs, now);
+  const pending = pendingStages(task, stages, now);
+  if (pending.length === 0) return null;
 
-function buildReminder(task: TaskRow, tz: string): { subject: string; html: string; text: string } {
-  const when = task.all_day
-    ? new Intl.DateTimeFormat("en-IN", { timeZone: tz, day: "numeric", month: "long" }).format(
-        new Date(task.due_at),
-      )
-    : new Intl.DateTimeFormat("en-IN", {
-        timeZone: tz,
-        hour: "numeric",
-        minute: "2-digit",
-        day: "numeric",
-        month: "short",
-      }).format(new Date(task.due_at));
+  const target = pending[pending.length - 1];
+  const superseded = pending.slice(0, -1);
 
-  const inner =
-    `<h1 style="${S.h1}">${escapeHtml(task.title)}</h1>` +
-    `<p style="${S.sub}">Due ${escapeHtml(when)}${task.priority === "high" ? " · high priority" : ""}</p>` +
-    (task.notes ? `<p style="${S.why}">${escapeHtml(task.notes)}</p>` : "") +
-    `<p style="${S.task}"><a href="${escapeHtml(tasksUrl())}" style="${S.link}">Open your tasks →</a></p>`;
+  for (const old of superseded) {
+    for (const channel of channels) {
+      await claim(admin, task, old.stage, channel, false);
+    }
+  }
 
-  const text =
-    `${task.title}\nDue ${when}${task.priority === "high" ? " (high priority)" : ""}\n` +
-    (task.notes ? `\n${task.notes}\n` : "") +
-    `\nOpen your tasks: ${tasksUrl()}\n`;
+  const claimed: Channel[] = [];
+  for (const channel of channels) {
+    if (await claim(admin, task, target.stage, channel, true)) claimed.push(channel);
+  }
+  if (claimed.length === 0) {
+    return {
+      stage: target.stage,
+      delivered: false,
+      status: "already notified",
+      superseded: superseded.map((s) => s.stage),
+    };
+  }
+
+  const results = await notify(recipient, payloadFor(task, target.stage, recipient, now), claimed);
+
+  // Hand back the channels that failed, so the next tick tries them again. Without this
+  // one SMTP hiccup would silently retire the stage.
+  const failed = results.filter((x) => x.status !== "sent");
+  for (const f of failed) await release(admin, task, target.stage, f.channel);
+
+  const sent = results.filter((x) => x.status === "sent").map((x) => x.channel);
+  if (sent.length > 0) {
+    // last_reminded_at is what the rest of the app reads to show "reminded"; the ledger
+    // is the authority on *which* stage.
+    const { error } = await admin
+      .from("tasks")
+      .update({ last_reminded_at: now.toISOString() })
+      .eq("id", task.id);
+    if (error) throw error;
+  }
 
   return {
-    subject: `Reminder: ${task.title}`,
-    html: wrap(task.title, inner, "A reminder you set in Daily Edge."),
-    text: `${text}\nA reminder you set in Daily Edge.\nChange your settings: ${settingsUrl()}\n`,
+    stage: target.stage,
+    delivered: sent.length > 0,
+    channels: sent,
+    ...(failed.length ? { status: `failed: ${failed.map((f) => f.channel).join(",")}` } : {}),
+    ...(superseded.length ? { superseded: superseded.map((s) => s.stage) } : {}),
   };
 }
 
-const base = () => (Deno.env.get("APP_URL") ?? "").replace(/\/+$/, "");
-const tasksUrl = () => `${base()}/tasks`;
-const settingsUrl = () => `${base()}/settings`;
+/** Claim a (task, occurrence, stage, channel). False when someone else already has it. */
+async function claim(
+  admin: SupabaseClient,
+  task: TaskRow,
+  stage: string,
+  channel: Channel,
+  delivered: boolean,
+): Promise<boolean> {
+  const { error } = await admin.from("task_notifications").insert({
+    user_id: task.user_id,
+    task_id: task.id,
+    due_at: task.due_at,
+    stage,
+    channel,
+    delivered,
+  });
+  if (error) {
+    if (error.code === UNIQUE_VIOLATION) return false;
+    throw error;
+  }
+  return true;
+}
+
+async function release(
+  admin: SupabaseClient,
+  task: TaskRow,
+  stage: string,
+  channel: Channel,
+): Promise<void> {
+  const { error } = await admin
+    .from("task_notifications")
+    .delete()
+    .eq("task_id", task.id)
+    .eq("due_at", task.due_at!)
+    .eq("stage", stage)
+    .eq("channel", channel);
+  if (error) console.error("could not release claim", error.message);
+}
+
+// ------------------------------------------------------------------ wording
+
+function payloadFor(task: TaskRow, stage: string, recipient: Recipient, now: Date): NotifyPayload {
+  const tz = recipient.timezone;
+  const due = new Date(task.due_at!);
+  const gap = due.getTime() - now.getTime();
+  const when = describeDue(task.due_at!, task.all_day, tz);
+
+  const subtitle = stage.startsWith("nag:")
+    ? `Still open — was due ${describeGap(gap)}`
+    : stage === "due"
+      ? `Due now · ${when}`
+      : `Due ${describeGap(gap)} · ${when}`;
+
+  return {
+    title: task.title,
+    subtitle: task.priority === "high" ? `${subtitle} · high priority` : subtitle,
+    body: task.notes,
+    note: stage.startsWith("nag:")
+      ? "You're getting this because the task is still open. Snooze it from Telegram, or mark it done."
+      : "A reminder you set in Daily Edge.",
+    // Telegram-only; the email gets the "Open your tasks" link instead.
+    actions: [
+      { label: "✓ Done", data: `done:${task.id}` },
+      { label: "💤 1h", data: `snooze:${task.id}` },
+      { label: "→ Tomorrow", data: `tomorrow:${task.id}` },
+    ],
+  };
+}
 
 Deno.serve(async (req: Request) => {
   try {

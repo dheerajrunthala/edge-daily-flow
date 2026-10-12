@@ -38,7 +38,8 @@ same Supabase backend.
 ## Secrets — never in code, commits, or this file
 
 Edge Function secrets (set by the owner with `supabase secrets set`):
-`GEMINI_API_KEY`, `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `CRON_SECRET`, `APP_URL` (published Lovable URL).
+`GEMINI_API_KEY`, `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `CRON_SECRET`, `APP_URL` (published Lovable URL),
+`TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_BOT_USERNAME`.
 Vault (for pg_cron → functions): `project_url`, `cron_secret`.
 Cron-invoked functions require header `x-cron-secret` = `CRON_SECRET`. User-invoked functions
 require a valid user JWT. The browser never calls Gemini.
@@ -52,6 +53,80 @@ require a valid user JWT. The browser never calls Gemini.
 - Recipient = the user's auth email (look up via service role), never GMAIL_USER.
 - Every email has a footer link to `${APP_URL}/settings` to change times or turn off the digest.
 - Inline-styled, simple HTML (Gmail strips <style>). Include a plain-text part.
+
+## Notifications (Phase 5)
+
+Every notification in the project goes out through `_shared/notify.ts`, the way every email
+goes out through `_shared/email.ts`. `notify(recipient, payload, channels)` fans one payload
+across the recipient's enabled channels and reports each independently, so one channel
+failing never silences another.
+
+- **Channels** live in `notification_prefs.channels` (`notification_channel` enum).
+  `email` and `telegram` deliver; `push` is in the enum and in the UI but its sender is a
+  stub — browser push needs a service worker and stored subscriptions, which is Phase 6.
+  `activeChannels()` is exported separately from `notify()` so a caller can claim its
+  idempotency rows per channel before sending.
+- **Quiet hours** are enforced inside notify.ts, never by callers: it is a property of the
+  user, and forgetting it at one call site is the bug that wakes someone at 3am. Wall clock
+  in the user's timezone, normally wrapping midnight (22:00 → 07:00); `start = end` means
+  off. Nothing is claimed or sent during the window, so the ladder simply resumes after it.
+
+### The escalation ladder
+
+A task that opted into reminders (`remind_before` is set) walks these stages:
+
+| stage   | fires                                         |
+| ------- | --------------------------------------------- |
+| `lead`  | the user's `remind_before`                    |
+| `1h`    | one hour before due                           |
+| `15m`   | fifteen minutes before due                    |
+| `due`   | at `due_at`                                   |
+| `nag:k` | `due_at + k × nag_interval`, while still open |
+
+- **`task_notifications` is the ledger, not the timer.** One row per
+  (task, occurrence, stage, channel), claimed _before_ the send and deleted again if the
+  send fails — the same pattern as `brief_sends`. That is what makes a per-minute cron safe
+  to run 1440 times a day, and what makes two overlapping ticks unable to double-send.
+- A recurring task rolling `due_at` forward starts a **fresh ladder for free**, because the
+  ledger is keyed on `due_at`.
+- **Stages that coincide collapse.** With `remind_before` = 1 hour, `lead` and `1h` are the
+  same instant; `plan()` keys stages by fire time so the user gets one notification.
+- **A stage earlier than `tasks.created_at` never fires.** Creating a task due in five
+  minutes must not immediately ping "due in 1 hour". This is also why a 5-minute test task
+  only shows `lead` (if `remind_before` ≤ 5 min), `due` and the nags.
+- **Several stages pending at once** (the function was down) sends only the latest; the
+  older ones are written with `delivered = false` — accounted for, never fired late, and
+  not pretending an email went out.
+- **`snoozed_until`** retires every stage before it, permanently. The ladder resumes at the
+  current nag instead of replaying what it slept through.
+- **All-day tasks get only `lead`.** Their `due_at` is local midnight, so escalating through
+  "due now" and nagging would mean a birthday pinging you from 00:00.
+- Safety rails, deliberately opinionated: stop nagging after `NAG_WINDOW_HOURS = 48` or
+  `MAX_NAGS = 24`, whichever comes first, cap `MAX_PER_USER = 5` notifications per tick, and
+  drop fixed stages more than `MAX_LATENESS_HOURS = 6` late. Nags are exempt from the
+  lateness horizon because `plan()` only ever emits the current one.
+
+### Telegram (@DailyEdgeAppBot)
+
+- **Linking** is a one-time code: the browser calls `request_telegram_link()` (SECURITY
+  DEFINER, authenticated) which mints the code in the database — the browser never invents
+  it — and opens `t.me/<bot>?start=<code>`. The webhook consumes the code, binds `chat_id`,
+  nulls the code, and switches the `telegram` channel on. Codes are single-use and expire in
+  15 minutes. `unlink_telegram()` undoes both halves.
+- **Auth** is the `x-telegram-bot-api-secret-token` header against `TELEGRAM_WEBHOOK_SECRET`
+  (set via `setWebhook`'s `secret_token`), then `chat_id` → `telegram_links` for identity.
+  An unlinked chat can do nothing but `/start`.
+- **Registration needs no local secrets**: `POST {"register": true}` with a valid
+  `x-cron-secret` makes the function call `setWebhook` on itself, so it can be driven from
+  `select public.invoke_edge_function('telegram-webhook', '{"register": true}')` and the bot
+  token never leaves the platform's secret store. `{"info": true}` returns `getWebhookInfo`.
+- Reminder cards carry inline **Done / Snooze 1h / Tomorrow** buttons; `callback_data` is
+  `<action>:<task_id>` and the task is re-read scoped to the chat's user, so a guessed id
+  from another account is not actionable. The card is rewritten after the press so spent
+  buttons disappear.
+- Task mutations the bot performs live in `_shared/tasks.ts`, which mirrors
+  `src/lib/task-logic.ts` (recurrence roll-forward, "tomorrow" meaning tomorrow's date
+  rather than `due_at + 1 day`) — the bot has no browser to borrow that logic from.
 
 ## Data model (source of truth = migration files)
 
@@ -76,6 +151,15 @@ require a valid user JWT. The browser never calls Gemini.
   article is summarized and embedded exactly once, ever.
 - `brief_sends` (user_id, sent_for date, slot 'HH:MM', digest_id, unique on the first three)
   — the idempotency record for send-briefs. Owner-readable.
+- `notification_prefs` (user_id, channels `notification_channel[]` default `{email}`,
+  quiet_start/quiet_end `time` default 22:00–07:00, nag_interval interval default 15 min)
+  — owner-managed, seeded by `handle_new_user`.
+- `task_notifications` (user_id, task_id, due_at of the occurrence, stage, channel,
+  delivered, sent_at, unique on (task_id, due_at, stage, channel)) — the escalation ledger.
+  Owner-readable; the service role writes.
+- `tasks.snoozed_until` — "not now"; suppresses every stage before that instant.
+- `telegram_links` (user_id, chat_id unique, one-time code + expiry, linked_at)
+  — owner-readable only; written by `request_telegram_link()` and the webhook.
 - `prefetch_feeds` / `prefetch_requests` — plumbing for the Google News workaround below.
   RLS on with **no policies**: service role and SECURITY DEFINER functions only.
 - `ai_events` (user_id, kind, items_processed, tokens) → Insights page + rate limiting.
@@ -92,7 +176,7 @@ Never run the full Gemini pipeline per user. Built in Phase 3 and live:
 2. `build-digests` (cron, right after): per user, a single Gemini call ranks that day's pooled
    articles for the user's categories against `profiles.news_profile`, picks top N, writes
    `why_it_matters`, and inserts `digests` + `news_items` (copying fields + embedding).
-   Still to do (Phase 5) — follow-up linking: nearest neighbour among that user's `news_items`
+   Still to do (Phase 6) — follow-up linking: nearest neighbour among that user's `news_items`
    from the last 14 days (cosine similarity threshold ~0.85, tune it) → `related_item_id`.
 
 ### Item pipeline (helpers all live in `_shared/feeds.ts`)
@@ -189,16 +273,19 @@ pooled 68 aggregator-tier articles of which 54 carry `url_resolved = false`.
 | `0 1 * * *`    | `fanout-ingest-news`        | `fanout_ingest_news()` → one ingest-news call per followed category |
 | `30 1 * * *`   | `build-digests`             | one Gemini call per user over the shared pool                       |
 | `*/15 * * * *` | `send-briefs`               | emails whoever's `email_time` falls in this window                  |
-| `*/15 * * * *` | `check-reminders`           | emails task reminders that have come due                            |
+| `* * * * *`    | `check-reminders`           | the task escalation ladder (see Notifications)                      |
 
-Defined in `20261012072101_cron_schedules.sql`. `invoke_edge_function(name, body)` reads
+Defined in `20261012072101_cron_schedules.sql`; `check-reminders` was moved to every
+minute by `20261012090000_notifications.sql`. `invoke_edge_function(name, body)` reads
 `project_url` and `cron_secret` from Vault, so no secret is ever inlined into a
 `cron.job` row. **To run any of these by hand, call the same SQL** rather than inventing a
 new path — it is the exact production path.
 
 ## Edge Functions
 
-1. `parse-task` (user JWT) — free text → Gemini with JSON response schema → array of tasks
+1. `parse-task` (user JWT) — free text → Gemini with JSON response schema → array of tasks.
+   The parsing itself is `_shared/parse-tasks.ts`, shared with the Telegram bot so the
+   prompt, schema and rate limit cannot drift between the two front doors. Each task carries
    (title, notes, due_at ISO with the user's UTC offset, all_day, recurrence, priority, tags,
    remind_before). Pass today's date, weekday and the user's timezone + existing tag names in the
    prompt. Returns a preview only; the UI saves. Rate limit: 50 calls/user/day (count `ai_events`).
@@ -227,12 +314,17 @@ new path — it is the exact production path.
    overlapping ticks cannot both email; a failed send **releases** the claim, otherwise one SMTP
    hiccup would mark the slot sent and the user would silently get nothing that day. An item with
    `url_resolved = false` is labelled "via Google News".
-5. `check-reminders` (cron every 15 min) — tasks where `due_at - remind_before <= now()`, still
-   todo, and not reminded for _this occurrence_ (`last_reminded_at < fireAt`; the recurrence
-   roll-forward moving `due_at` is what resets it). Sends a short email, then stamps
-   `last_reminded_at` — in that order, so a failed send is retried next tick. Ignores anything
-   more than `MAX_LATENESS_HOURS` late (a day of downtime should not become a backlog of alarms)
-   and caps at 5 emails per user per tick.
+5. `check-reminders` (cron **every minute**) — the escalation ladder described under
+   Notifications. Computes each open reminder task's stages, claims the current one in
+   `task_notifications` per channel, fans out through `notify()`, releases the claim on a
+   failed send, and stamps `last_reminded_at` for the rest of the app. A tick with nothing
+   due is one indexed query and returns in well under a second.
+6. `telegram-webhook` (**no JWT**; `x-telegram-bot-api-secret-token` verified against
+   `TELEGRAM_WEBHOOK_SECRET`) — `/start <code>` linking, `/today` `/tasks` `/brief` `/help`,
+   free text → `parseTasks()` → rows in `tasks` (no preview step in a chat), and the
+   Done / Snooze 1h / Tomorrow buttons. Always answers 200 after the secret check, because a
+   non-200 makes Telegram redeliver the update forever. Also self-registers on
+   `{"register": true}` + `x-cron-secret`.
 
 ## Source map (`_shared/feeds.ts`) — all URLs verified 2026-10-12
 
@@ -301,12 +393,19 @@ ranking prompt:
       linked it to the digest and stamped `digests.emailed_at`, and re-firing the same slot
       answered "already sent" without a second email. `check-reminders` runs clean but its
       SMTP path is still unexercised — no task has `remind_before` set yet.
-- [ ] Phase 5: follow-up linking, Insights page with real data, PWA polish
-- [ ] Phase 6 (optional): Telegram bot, weekly review email, "ask my news" chat, X highlights
+- [x] Phase 5: Notifications. `notification_prefs`, `task_notifications`,
+      `tasks.snoozed_until`, `telegram_links`; `_shared/notify.ts`; check-reminders reworked
+      into the escalation ladder on a per-minute cron; `telegram-webhook` with linking,
+      inline buttons, commands and free-text task capture; Settings UI for channels, quiet
+      hours and the nag interval.
+- [ ] Phase 6: follow-up linking, Insights page with real data, PWA polish + web push
+      (the `push` channel is already in the enum and the UI)
+- [ ] Phase 7 (optional): weekly review email, "ask my news" chat, X highlights
 
 ## Working conventions
 
 - Test each Edge Function by invoking it and reading logs via MCP before wiring cron.
 - `npm run build` and `npm run lint` must pass before committing frontend changes.
-- Shared helpers in `supabase/functions/_shared/` (gemini.ts, email.ts, supabase.ts, feeds.ts, time.ts).
+- Shared helpers in `supabase/functions/_shared/` (gemini.ts, email.ts, notify.ts, telegram.ts,
+  supabase.ts, feeds.ts, time.ts, tasks.ts, parse-tasks.ts).
 - Log every Gemini call to `ai_events`.

@@ -1,11 +1,13 @@
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import type { Tables, TablesInsert, TablesUpdate } from "@/integrations/supabase/types";
+import type { Enums, Tables, TablesInsert, TablesUpdate } from "@/integrations/supabase/types";
 import { nextOccurrenceAhead, type Task } from "./task-logic";
 import { toast } from "sonner";
 
 export type Profile = Tables<"profiles">;
 export type Prefs = Tables<"news_prefs">;
+export type NotifyPrefs = Tables<"notification_prefs">;
+export type NotifyChannel = Enums<"notification_channel">;
 export type Tag = Tables<"tags">;
 export type Digest = Tables<"digests">;
 export type NewsItem = Omit<Tables<"news_items">, "embedding">;
@@ -22,6 +24,8 @@ async function uid() {
 export const qk = {
   profile: ["profile"] as const,
   prefs: ["prefs"] as const,
+  notifyPrefs: ["notification_prefs"] as const,
+  telegram: ["telegram_link"] as const,
   tags: ["tags"] as const,
   tasks: ["tasks"] as const,
   digests: ["digests"] as const,
@@ -56,6 +60,42 @@ export const usePrefs = () =>
       const { data, error } = await supabase
         .from("news_prefs")
         .select("*")
+        .eq("user_id", id)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+  });
+
+export const useNotifyPrefs = () =>
+  useQuery({
+    queryKey: qk.notifyPrefs,
+    queryFn: async () => {
+      const id = await uid();
+      const { data, error } = await supabase
+        .from("notification_prefs")
+        .select("*")
+        .eq("user_id", id)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+  });
+
+/**
+ * chat_id and linked_at only — the link code is never needed after it is handed over.
+ * `poll` is for the few seconds after Connect is tapped: the link is completed by
+ * Telegram calling the webhook, so the browser has nothing to await and must look.
+ */
+export const useTelegramLink = (poll = false) =>
+  useQuery({
+    queryKey: qk.telegram,
+    refetchInterval: poll ? 3000 : false,
+    queryFn: async () => {
+      const id = await uid();
+      const { data, error } = await supabase
+        .from("telegram_links")
+        .select("chat_id, linked_at")
         .eq("user_id", id)
         .maybeSingle();
       if (error) throw error;
@@ -183,6 +223,63 @@ export function useUpdatePrefs() {
   });
 }
 
+export function useUpdateNotifyPrefs() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (patch: Omit<TablesUpdate<"notification_prefs">, "user_id">) => {
+      const id = await uid();
+      // Upsert, not update: a user who signed up before notification_prefs existed and
+      // somehow missed the backfill would otherwise silently fail to save anything.
+      const { error } = await supabase
+        .from("notification_prefs")
+        .upsert({ ...patch, user_id: id }, { onConflict: "user_id" });
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.notifyPrefs }),
+    onError: (e: Error) => toast.error(e.message),
+  });
+}
+
+/**
+ * Connect and disconnect Telegram. The code is minted by the database
+ * (request_telegram_link), never by the browser, and is good for one /start within
+ * 15 minutes.
+ */
+export function useTelegramActions() {
+  const qc = useQueryClient();
+  const done = () => {
+    qc.invalidateQueries({ queryKey: qk.telegram });
+    qc.invalidateQueries({ queryKey: qk.notifyPrefs });
+  };
+  const onError = (e: Error) => toast.error(e.message);
+
+  const connect = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await supabase.rpc("request_telegram_link");
+      if (error) throw error;
+      const row = Array.isArray(data) ? data[0] : data;
+      if (!row?.code) throw new Error("Could not create a link code");
+      return row;
+    },
+    onSuccess: done,
+    onError,
+  });
+
+  const unlink = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase.rpc("unlink_telegram");
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      done();
+      toast.success("Telegram disconnected");
+    },
+    onError,
+  });
+
+  return { connect, unlink };
+}
+
 export function useSaveTask() {
   const qc = useQueryClient();
   return useMutation({
@@ -233,7 +330,7 @@ export function useToggleTask(tz: string) {
       if (task.status === "done") {
         const { error } = await supabase
           .from("tasks")
-          .update({ status: "todo", completed_at: null })
+          .update({ status: "todo", completed_at: null, snoozed_until: null })
           .eq("id", task.id);
         if (error) throw error;
         // Drop the logged completion too, or Insights keeps counting a task that is open again.
@@ -253,7 +350,10 @@ export function useToggleTask(tz: string) {
           .from("tasks")
           .update({
             due_at: nextOccurrenceAhead(task.due_at, task.recurrence, tz, task.all_day),
+            // The next occurrence starts a fresh escalation, so neither the old reminder
+            // stamp nor a snooze aimed at the occurrence just completed should carry over.
             last_reminded_at: null,
+            snoozed_until: null,
           })
           .eq("id", task.id);
         if (e2) throw e2;
