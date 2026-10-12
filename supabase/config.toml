@@ -1,1 +1,5 @@
 project_id = "uhhphhkpxxofspbfynmo"
+# parse-task is only ever called from the browser with the user's session JWT, so the
+# platform check stays on. The handler also verifies the token itself to get the user id.
+[functions.parse-task]
+verify_jwt = true

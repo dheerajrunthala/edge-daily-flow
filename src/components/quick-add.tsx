@@ -1,12 +1,28 @@
 import { forwardRef, useState } from "react";
 import { Loader2, Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
+import { FunctionsHttpError } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import { useInsertTasks } from "@/lib/queries";
 import type { Task } from "@/lib/task-logic";
 import { ResponsiveModal } from "./responsive-modal";
 import { TaskFields, draftToRow, taskToDraft, type TaskDraft } from "./task-form";
 import { Button } from "@/components/ui/button";
+
+/** What parse-task returns. It only previews — nothing is written until the user saves. */
+type ParseTaskResponse = { tasks: Partial<Task>[]; remaining?: number };
+
+/**
+ * invoke() reports an HTTP error without reading the body, so the function's own message
+ * (rate limit, validation, upstream failure) is in error.context and has to be unwrapped.
+ */
+async function parseTaskErrorMessage(error: unknown): Promise<string> {
+  if (error instanceof FunctionsHttpError) {
+    const body = await (error.context as Response).json().catch(() => null);
+    if (body && typeof body.error === "string") return body.error;
+  }
+  return "Couldn't reach the AI parser. Please try again.";
+}
 
 export const QuickAdd = forwardRef<HTMLInputElement, { tz: string }>(function QuickAdd(
   { tz },
@@ -23,17 +39,26 @@ export const QuickAdd = forwardRef<HTMLInputElement, { tz: string }>(function Qu
     if (!text.trim()) return;
     setLoading(true);
     try {
-      // TODO: 'parse-task' edge function is built later. Expected response: { tasks: Partial<Task>[] }
-      const { data, error } = await supabase.functions.invoke("parse-task", { body: { text } });
-      if (error) throw error;
-      const tasks = (data?.tasks ?? []) as Partial<Task>[];
-      if (!tasks.length) throw new Error("empty");
+      const { data, error } = await supabase.functions.invoke<ParseTaskResponse>("parse-task", {
+        body: { text },
+      });
+      if (error) throw new Error(await parseTaskErrorMessage(error));
+
+      const tasks = data?.tasks ?? [];
+      if (!tasks.length) {
+        toast("Couldn't find a task in that", {
+          description: "Try naming what to do and when, e.g. “pay rent on the 5th”.",
+        });
+        return;
+      }
       setPreview(tasks.map((t) => taskToDraft(t, tz)));
       setEditing(0);
-    } catch {
-      toast("AI quick-add is coming soon", {
-        description: "For now, use the + button to add tasks.",
-      });
+      // Only worth mentioning once the daily allowance is close to running out.
+      if (typeof data?.remaining === "number" && data.remaining <= 5) {
+        toast(`${data.remaining} AI parses left today`);
+      }
+    } catch (err) {
+      toast.error((err as Error).message);
     } finally {
       setLoading(false);
     }
@@ -41,10 +66,12 @@ export const QuickAdd = forwardRef<HTMLInputElement, { tz: string }>(function Qu
 
   async function saveAll() {
     if (!preview) return;
-    await insert.mutateAsync(
-      preview.filter((d) => d.title.trim()).map((d) => ({ ...draftToRow(d, tz), source: "ai" })),
-    );
-    toast.success(`Added ${preview.length} task${preview.length > 1 ? "s" : ""}`);
+    const rows = preview
+      .filter((d) => d.title.trim())
+      .map((d) => ({ ...draftToRow(d, tz), source: "ai" }));
+    if (!rows.length) return;
+    await insert.mutateAsync(rows);
+    toast.success(`Added ${rows.length} task${rows.length > 1 ? "s" : ""}`);
     setPreview(null);
     setText("");
   }
