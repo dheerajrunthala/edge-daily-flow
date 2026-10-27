@@ -32,6 +32,22 @@ const DEFAULT_TZ = "Asia/Kolkata";
  * this function has no other use for the source map.
  */
 const PER_CATEGORY = 40;
+/**
+ * Candidates a single topic may contribute.
+ *
+ * Lower than PER_CATEGORY on purpose: a category is a whole section of the brief, while
+ * a topic is one reader's narrow interest, and twenty topics at forty apiece would hand
+ * the ranking prompt eight hundred candidates and a bill to match.
+ */
+const PER_TOPIC = 15;
+/**
+ * The ceiling on everything the ranking prompt sees.
+ *
+ * Categories alone could never approach it (six categories at forty), but topics are
+ * user-controlled and the prompt cost is linear in this number, so the union needs a
+ * limit that does not depend on how many interests someone has typed in.
+ */
+const MAX_CANDIDATES = 260;
 /** Excerpt length per candidate in the prompt. Enough to rank on, not enough to be costly. */
 const PROMPT_SUMMARY_CHARS = 260;
 
@@ -307,12 +323,25 @@ async function upsertDigest(
  * Today's pool for the user's categories, capped per category so one busy category
  * cannot crowd out the rest of the prompt.
  */
+/**
+ * Today's candidates for one reader: their categories, plus whatever their topics match.
+ *
+ * The two halves answer different questions. A category is "which feeds do we even
+ * fetch for this person" and is capped per category so every section of the brief gets
+ * a fair hearing. A topic is "find me this regardless of which feed carried it" — a
+ * vector query over the same already-embedded pool, which costs nothing extra per day
+ * and is the only way a reader can follow something we have no dedicated feed for.
+ *
+ * They union rather than replace. A user with no topics gets exactly the old digest,
+ * which is what makes this safe to ship to existing accounts.
+ */
 async function poolForUser(
   admin: SupabaseClient,
   user: UserRow,
   today: string,
 ): Promise<ArticleRow[]> {
-  const out: ArticleRow[] = [];
+  const byId = new Map<string, ArticleRow>();
+
   for (const category of user.categories) {
     const { data, error } = await admin
       .from("articles")
@@ -325,9 +354,50 @@ async function poolForUser(
       .order("published_at", { ascending: false, nullsFirst: false })
       .limit(PER_CATEGORY);
     if (error) throw error;
-    out.push(...((data ?? []) as ArticleRow[]));
+    for (const row of (data ?? []) as ArticleRow[]) byId.set(row.id, row);
   }
-  return out;
+
+  const fromTopics = await topicCandidates(admin, user, today);
+  // Topics are added after categories and keyed by id, so a story both reach is carried
+  // once. Which copy wins does not matter — they are the same row out of the same pool.
+  for (const row of fromTopics) byId.set(row.id, row);
+
+  const all = [...byId.values()];
+  if (all.length <= MAX_CANDIDATES) return all;
+
+  // Over the ceiling, keep the most corroborated stories: source_count is the one signal
+  // here the model cannot read off a headline, and it is what ingest-news already uses
+  // to decide a story is big.
+  return all.sort((a, b) => (b.source_count ?? 1) - (a.source_count ?? 1)).slice(0, MAX_CANDIDATES);
+}
+
+/**
+ * The topic half, or nothing at all.
+ *
+ * Deliberately swallows its own failure. Topics are additive — a digest built from
+ * categories alone is the product as it shipped for three weeks — so a broken RPC should
+ * narrow someone's brief, not replace it with a `failed` row and an empty page.
+ */
+async function topicCandidates(
+  admin: SupabaseClient,
+  user: UserRow,
+  today: string,
+): Promise<ArticleRow[]> {
+  const { data, error } = await admin.rpc("match_topics_pool", {
+    p_user_id: user.user_id,
+    p_since: today,
+    p_per_topic: PER_TOPIC,
+  });
+  if (error) {
+    console.error(`[${user.user_id}] topic retrieval failed: ${error.message}`);
+    return [];
+  }
+
+  const rows = (data ?? []) as (ArticleRow & { matched_topics: string[] })[];
+  if (rows.length > 0) {
+    console.log(`[${user.user_id}] topics contributed ${rows.length} candidates`);
+  }
+  return rows;
 }
 
 const RANK_SCHEMA = {
