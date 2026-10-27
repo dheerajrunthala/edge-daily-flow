@@ -213,6 +213,8 @@ async function buildForUser(admin: SupabaseClient, user: UserRow, force: boolean
 
   await writeItems(admin, user, digestId, picks, candidates);
 
+  const linked = await linkFollowups(admin, user.user_id, digestId);
+
   const atAGlance = (data?.at_a_glance ?? "").trim().slice(0, 1200) || null;
   await admin
     .from("digests")
@@ -234,7 +236,8 @@ async function buildForUser(admin: SupabaseClient, user: UserRow, force: boolean
   });
 
   console.log(
-    `[${user.user_id}] ranked ${candidates.length} candidates -> ${picks.length} items for ${today}`,
+    `[${user.user_id}] ranked ${candidates.length} candidates -> ${picks.length} items for ${today}` +
+      `, ${linked} follow-up${linked === 1 ? "" : "s"} linked`,
   );
   return {
     calls: 1,
@@ -245,8 +248,34 @@ async function buildForUser(admin: SupabaseClient, user: UserRow, force: boolean
       digest_id: digestId,
       candidates: candidates.length,
       items: picks.length,
+      followups: linked,
     },
   };
+}
+
+/**
+ * Point each of today's items at the earlier item it continues, where there is one.
+ *
+ * This is the only place the embeddings copied into news_items are ever read. It runs
+ * after writeItems because it needs today's rows to already carry their vectors, and it
+ * is deliberately not allowed to fail the digest: a missing "Follow-up" badge is a worse
+ * outcome than a missing digest only if you have never seen a user open the app to find
+ * nothing there. The ranking already cost a Gemini call by this point.
+ */
+async function linkFollowups(
+  admin: SupabaseClient,
+  userId: string,
+  digestId: string,
+): Promise<number> {
+  const { data, error } = await admin.rpc("link_followups", {
+    p_user_id: userId,
+    p_digest_id: digestId,
+  });
+  if (error) {
+    console.error(`[${userId}] follow-up linking failed: ${error.message}`);
+    return 0;
+  }
+  return typeof data === "number" ? data : 0;
 }
 
 async function upsertDigest(
