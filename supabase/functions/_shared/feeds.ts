@@ -453,17 +453,28 @@ function linkHref(block: string): string | null {
 /**
  * RFC-822/ISO dates parse directly. SEBI is the exception: it emits
  * "09 Oct, 2026 +0530", which Date.parse rejects outright.
+ *
+ * The day-month-year shape is tried *before* Date.parse, not after, and that ordering is
+ * load-bearing. V8 parses a zoneless "09 Oct, 2026" leniently and reads it as midnight
+ * **in the server's own timezone** — so the same SEBI item resolved to 2026-10-09T00:00Z
+ * in the Edge runtime (UTC) and 2026-10-08T18:30Z on an Asia/Kolkata laptop, which is a
+ * different calendar day and therefore a different answer from isRecent(). Handling the
+ * shape here pins it to UTC and makes the result independent of where the code runs.
+ *
+ * This is the same failure mode CLAUDE.md records for dayKey(): a date helper that
+ * quietly borrows the host's locale. Found by the first test ever written for this file.
  */
 export function parseFeedDate(raw: string | null): Date | null {
   if (!raw) return null;
+
+  const m = raw.trim().match(/^(\d{1,2})\s+([A-Za-z]{3,})[,.]?\s+(\d{4})\s*([+-]\d{4})?$/);
+  if (m) {
+    const parsed = Date.parse(`${m[1]} ${m[2].slice(0, 3)} ${m[3]} 00:00:00 ${m[4] ?? "+0000"}`);
+    if (!Number.isNaN(parsed)) return new Date(parsed);
+  }
+
   const direct = Date.parse(raw);
   if (!Number.isNaN(direct)) return new Date(direct);
-
-  const m = raw.match(/^(\d{1,2})\s+([A-Za-z]{3,})[,.]?\s+(\d{4})\s*([+-]\d{4})?$/);
-  if (m) {
-    const retry = Date.parse(`${m[1]} ${m[2].slice(0, 3)} ${m[3]} 00:00:00 ${m[4] ?? "+0000"}`);
-    if (!Number.isNaN(retry)) return new Date(retry);
-  }
   return null;
 }
 
