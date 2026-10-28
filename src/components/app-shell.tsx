@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   BarChart3,
   CheckSquare,
+  MessageCircle,
   LogOut,
   Newspaper,
   PanelLeftClose,
@@ -21,6 +22,7 @@ const NAV = [
   { to: "/brief", label: "Brief", icon: Sun },
   { to: "/tasks", label: "Tasks", icon: CheckSquare },
   { to: "/news", label: "News", icon: Newspaper },
+  { to: "/ask", label: "Ask", icon: MessageCircle },
   { to: "/insights", label: "Insights", icon: BarChart3 },
   { to: "/settings", label: "Settings", icon: Settings },
 ] as const;
