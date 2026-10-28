@@ -13,6 +13,17 @@ export const GEMINI_PARSE_MODEL = "gemini-flash-latest";
 /** Per-article news summarizing — high volume, so the cheap tier. */
 export const GEMINI_BULK_MODEL = "gemini-flash-lite-latest";
 
+/**
+ * Where a call goes when the primary model is out of capacity.
+ *
+ * "gemini-flash-latest" is an alias onto whatever the current Flash release is, which
+ * means we share its capacity with everyone else pointing at the same alias — and it
+ * answers 503 "this model is currently experiencing high demand" often enough to have
+ * failed real digests on 2026-10-24, -25 and -28. The lite tier is a different pool, and
+ * a digest ranked by the cheaper model is enormously better than no digest at all.
+ */
+export const GEMINI_FALLBACK_MODEL = "gemini-flash-lite-latest";
+
 /** News similarity. news_items.embedding is vector(768), so keep these in step. */
 export const GEMINI_EMBEDDING_MODEL = "gemini-embedding-001";
 export const EMBEDDING_DIMENSIONS = 768;
@@ -39,7 +50,21 @@ function apiKey(): string {
 
 /** Transient upstream conditions: capacity (503), quota bursts (429), and 5xx blips. */
 const RETRYABLE = new Set([429, 500, 502, 503, 504]);
-const MAX_ATTEMPTS = 3;
+
+/**
+ * Attempts against the primary model, then against the fallback.
+ *
+ * The old policy was three attempts with 0.5s and 1s of backoff — about two seconds of
+ * patience for an upstream that is telling us it is overloaded. That is not a retry
+ * policy, it is a formality, and it lost three days of digests. Five attempts backing
+ * off 1s/2s/4s/8s spends at most ~15s, which is nothing against the 150s wall clock and
+ * is long enough for a capacity spike to pass.
+ *
+ * The fallback gets two attempts rather than five: if the primary is out of capacity and
+ * the fallback is too, the answer is to come back later, not to keep paying.
+ */
+const MAX_ATTEMPTS = 5;
+const FALLBACK_ATTEMPTS = 2;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -55,28 +80,62 @@ async function postGenerate(
   model: string,
   payload: string,
   signal?: AbortSignal,
+  fallbackModel?: string,
 ): Promise<GeminiEnvelope> {
-  let res!: Response;
-  let body = "";
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    res = await fetch(`${API_ROOT}/models/${model}:generateContent`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": apiKey() },
-      signal: signal ?? null,
-      body: payload,
-    });
-    body = await res.text();
-    if (res.ok || !RETRYABLE.has(res.status) || attempt === MAX_ATTEMPTS) break;
-    // 0.5s, then 1s, each with up to 250ms of jitter so parallel callers don't sync up.
-    const backoff = 500 * 2 ** (attempt - 1) + Math.floor(Math.random() * 250);
-    console.warn(`gemini ${res.status}, retrying in ${backoff}ms (attempt ${attempt})`);
-    await sleep(backoff);
+  const plan: { model: string; attempts: number }[] = [{ model, attempts: MAX_ATTEMPTS }];
+  if (fallbackModel && fallbackModel !== model) {
+    plan.push({ model: fallbackModel, attempts: FALLBACK_ATTEMPTS });
   }
 
-  if (!res.ok) {
-    throw new GeminiError(`Gemini ${res.status}: ${body.slice(0, 600)}`, res.status);
+  let lastStatus = 0;
+  let lastBody = "";
+
+  for (const [planIndex, step] of plan.entries()) {
+    for (let attempt = 1; attempt <= step.attempts; attempt++) {
+      const res = await fetch(`${API_ROOT}/models/${step.model}:generateContent`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": apiKey() },
+        signal: signal ?? null,
+        body: payload,
+      });
+      const body = await res.text();
+
+      if (res.ok) {
+        if (planIndex > 0) {
+          console.warn(`gemini: answered by fallback model ${step.model}`);
+        }
+        return readEnvelope(body);
+      }
+
+      lastStatus = res.status;
+      lastBody = body;
+
+      // Not transient: another attempt and another model will both fail the same way.
+      if (!RETRYABLE.has(res.status)) {
+        throw new GeminiError(`Gemini ${res.status}: ${body.slice(0, 600)}`, res.status);
+      }
+
+      if (attempt < step.attempts) {
+        // 1s, 2s, 4s, 8s, each with up to 500ms of jitter so parallel callers — the
+        // per-category ingest fan-out, say — do not retry in lockstep and re-create the
+        // spike they are backing off from.
+        const backoff = 1000 * 2 ** (attempt - 1) + Math.floor(Math.random() * 500);
+        console.warn(
+          `gemini ${res.status} on ${step.model}, retrying in ${backoff}ms (attempt ${attempt}/${step.attempts})`,
+        );
+        await sleep(backoff);
+      }
+    }
+    if (planIndex < plan.length - 1) {
+      console.warn(`gemini: ${step.model} out of capacity after ${step.attempts}, trying fallback`);
+    }
   }
 
+  throw new GeminiError(`Gemini ${lastStatus}: ${lastBody.slice(0, 600)}`, lastStatus);
+}
+
+/** Parse and check a 200 body. A block or a truncated answer both arrive as HTTP 200. */
+function readEnvelope(body: string): GeminiEnvelope {
   let envelope: GeminiEnvelope;
   try {
     envelope = JSON.parse(body) as GeminiEnvelope;
@@ -84,8 +143,6 @@ async function postGenerate(
     throw new GeminiError(`Gemini returned non-JSON: ${body.slice(0, 300)}`);
   }
 
-  // A safety block or a truncated answer both arrive as HTTP 200, so check explicitly
-  // rather than letting JSON.parse fail on a half-written object.
   const blocked = envelope.promptFeedback?.blockReason;
   if (blocked) throw new GeminiError(`Gemini blocked the prompt: ${blocked}`);
 
@@ -116,6 +173,8 @@ export async function generateJson<T>(opts: {
   schema: Record<string, unknown>;
   temperature?: number;
   signal?: AbortSignal;
+  /** Model to try when the primary is out of capacity. Pass null to disable. */
+  fallbackModel?: string | null;
 }): Promise<{ data: T; usage: Usage }> {
   const model = opts.model ?? GEMINI_PARSE_MODEL;
   const payload = JSON.stringify({
@@ -128,7 +187,12 @@ export async function generateJson<T>(opts: {
     },
   });
 
-  const envelope = await postGenerate(model, payload, opts.signal);
+  const envelope = await postGenerate(
+    model,
+    payload,
+    opts.signal,
+    opts.fallbackModel === null ? undefined : (opts.fallbackModel ?? GEMINI_FALLBACK_MODEL),
+  );
   const candidate = envelope.candidates?.[0];
 
   const text = (candidate?.content?.parts ?? [])
@@ -208,8 +272,15 @@ export async function embedBatch(
     });
     body = await res.text();
     if (res.ok || !RETRYABLE.has(res.status) || attempt === MAX_ATTEMPTS) break;
-    const backoff = 500 * 2 ** (attempt - 1) + Math.floor(Math.random() * 250);
-    console.warn(`embed ${res.status}, retrying in ${backoff}ms (attempt ${attempt})`);
+    // Same policy as postGenerate. The embedding model shares the capacity pressure:
+    // 2026-10-28's ingest pooled 138 articles and embedded only 99 of them, and an
+    // article with no vector is invisible to topic matching and to follow-up linking
+    // for as long as it stays in the pool — which, because articles are upserted with
+    // ignoreDuplicates on a unique url, is forever.
+    const backoff = 1000 * 2 ** (attempt - 1) + Math.floor(Math.random() * 500);
+    console.warn(
+      `embed ${res.status}, retrying in ${backoff}ms (attempt ${attempt}/${MAX_ATTEMPTS})`,
+    );
     await sleep(backoff);
   }
   if (!res.ok) {
@@ -298,6 +369,8 @@ export async function generateWithTools(opts: {
   maxTurns?: number;
   temperature?: number;
   signal?: AbortSignal;
+  /** Model to try when the primary is out of capacity. Pass null to disable. */
+  fallbackModel?: string | null;
 }): Promise<{ text: string; usage: Usage; calls: ToolCallRecord[]; turns: number }> {
   const model = opts.model ?? GEMINI_PARSE_MODEL;
   const maxTurns = Math.max(1, Math.min(opts.maxTurns ?? MAX_TOOL_TURNS, MAX_TOOL_TURNS));
@@ -338,6 +411,7 @@ export async function generateWithTools(opts: {
         generationConfig: { temperature: opts.temperature ?? 0.2 },
       }),
       opts.signal,
+      opts.fallbackModel === null ? undefined : (opts.fallbackModel ?? GEMINI_FALLBACK_MODEL),
     );
     addUsage(readUsage(envelope));
 
