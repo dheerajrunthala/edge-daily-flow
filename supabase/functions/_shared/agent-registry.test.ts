@@ -57,10 +57,24 @@ describe("surface allowlists", () => {
     }
   });
 
-  it("declares every tool with a description and an object schema", () => {
+  // Regression, and an expensive one to have learned: Gemini's generateContent *hangs*
+  // on a tool declared with `{ type: "object", properties: {} }` — it does not 400, it
+  // never answers, and the platform kills the invocation with IDLE_TIMEOUT and no log
+  // line naming the cause. A no-argument tool must omit `parameters` entirely.
+  it("never declares an empty parameter schema, on any surface", () => {
+    for (const surface of Object.keys(SURFACE_TOOLS) as (keyof typeof SURFACE_TOOLS)[]) {
+      for (const d of declarationsFor(surface)) {
+        if (d.parameters === undefined) continue;
+        const props = (d.parameters.properties ?? {}) as Record<string, unknown>;
+        expect(Object.keys(props).length, `${surface}/${d.name}`).toBeGreaterThan(0);
+        expect((d.parameters as { type: string }).type, d.name).toBe("object");
+      }
+    }
+  });
+
+  it("gives every tool a description long enough to route on", () => {
     for (const d of declarationsFor("chat")) {
       expect(d.description.length, d.name).toBeGreaterThan(20);
-      expect((d.parameters as { type: string }).type, d.name).toBe("object");
     }
   });
 });

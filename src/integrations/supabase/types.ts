@@ -209,6 +209,7 @@ export type Database = {
           error: string | null
           id: string
           ok: boolean
+          surface: string
           token_id: string | null
           tool: string
           user_id: string
@@ -219,6 +220,7 @@ export type Database = {
           error?: string | null
           id?: string
           ok: boolean
+          surface?: string
           token_id?: string | null
           tool: string
           user_id: string
@@ -229,6 +231,7 @@ export type Database = {
           error?: string | null
           id?: string
           ok?: boolean
+          surface?: string
           token_id?: string | null
           tool?: string
           user_id?: string
@@ -377,6 +380,27 @@ export type Database = {
           quiet_end?: string
           quiet_start?: string
           updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      plan_sends: {
+        Row: {
+          created_at: string
+          id: string
+          sent_for: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          sent_for: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          sent_for?: string
           user_id?: string
         }
         Relationships: []
@@ -667,6 +691,57 @@ export type Database = {
         }
         Relationships: []
       }
+      topics: {
+        Row: {
+          created_at: string
+          embedding: string | null
+          enabled: boolean
+          id: string
+          label: string
+          user_id: string
+          weight: number
+        }
+        Insert: {
+          created_at?: string
+          embedding?: string | null
+          enabled?: boolean
+          id?: string
+          label: string
+          user_id: string
+          weight?: number
+        }
+        Update: {
+          created_at?: string
+          embedding?: string | null
+          enabled?: boolean
+          id?: string
+          label?: string
+          user_id?: string
+          weight?: number
+        }
+        Relationships: []
+      }
+      user_features: {
+        Row: {
+          enabled: boolean
+          feature: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          enabled?: boolean
+          feature: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          enabled?: boolean
+          feature?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -694,6 +769,86 @@ export type Database = {
       invoke_edge_function: {
         Args: { p_body?: Json; p_name: string }
         Returns: number
+      }
+      link_followups: {
+        Args: {
+          p_days?: number
+          p_digest_id: string
+          p_min_similarity?: number
+          p_user_id: string
+        }
+        Returns: number
+      }
+      match_articles: {
+        Args: {
+          p_categories?: string[]
+          p_match_count?: number
+          p_min_similarity?: number
+          p_query_embedding: string
+          p_since?: string
+        }
+        Returns: {
+          category: string
+          feed_name: string
+          fetched_on: string
+          id: string
+          published_at: string
+          similarity: number
+          source: string
+          source_count: number
+          summary: string
+          tier: string
+          title: string
+          url: string
+          url_resolved: boolean
+        }[]
+      }
+      match_news_items: {
+        Args: {
+          p_match_count?: number
+          p_min_similarity?: number
+          p_query_embedding: string
+          p_since?: string
+          p_user_id: string
+        }
+        Returns: {
+          category: string
+          digest_id: string
+          headline: string
+          id: string
+          is_saved: boolean
+          published_at: string
+          read_at: string
+          similarity: number
+          source: string
+          summary: string
+          url: string
+          url_resolved: boolean
+          why_it_matters: string
+        }[]
+      }
+      match_topics_pool: {
+        Args: {
+          p_min_similarity?: number
+          p_per_topic?: number
+          p_since: string
+          p_user_id: string
+        }
+        Returns: {
+          category: string
+          embedding: string
+          id: string
+          matched_topics: string[]
+          published_at: string
+          score: number
+          source: string
+          source_count: number
+          summary: string
+          tier: string
+          title: string
+          url: string
+          url_resolved: boolean
+        }[]
       }
       prefetch_aggregator_feeds: { Args: never; Returns: number }
       request_telegram_link: {
