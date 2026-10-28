@@ -316,6 +316,184 @@ Reads carry `readOnlyHint`; `delete_task` carries `destructiveHint`.
   Config: `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS),
   `%APPDATA%\Claude\claude_desktop_config.json` (Windows).
 
+## The agent layer (Phase 8)
+
+The fifth front door, and the first one with a model on _our_ side of it.
+
+The MCP server is built on "the client is the intelligence": it does no parsing because an
+MCP client is already a model holding the conversation. The agent is the opposite case —
+the caller is a person typing or dictating, so the thinking has to happen here. **That is
+the only difference between them.** Both sit on the same ownership guard, the same date
+coercion and the same task shaping, so they differ in who thinks, not in what is true.
+
+### What is shared, and why those parts specifically
+
+`_shared/agent-tools.ts` owns the ownership guard (`mine`/`myRow`), every value coercion
+(`parseInstant`, `parseRemindBefore`, `snapToLocalMidnight`, `parseDate`, `sanitizeSearch`),
+the task shape, tag creation, and `loadUserCtx`. `mcp/tools.ts` imports all of it and keeps
+only what is genuinely MCP: the zod schemas, the `ToolResult` wrapper, and the `register()`
+rate-limit and audit wrapper.
+
+The 13 MCP handler _bodies_ were deliberately **not** moved. Moving 940 more lines of
+production-verified registration would be a large change for an architectural tidy, while
+the parts that can drift _dangerously_ are the ones that did move. Two copies of
+`parseInstant` would quietly book 2:30pm for an Asia/Kolkata user who said 9am.
+
+`Ctx` carries **no credential**. The MCP server extends it with the API token `register()`
+needs; the chat agent resolves the same shape from a session JWT; the planner builds it from
+a user id on a cron tick. A tool body cannot tell them apart, which is the point — one that
+could would eventually behave differently.
+
+### Surfaces get different tools by construction
+
+A prompt is a request; an allowlist is a rule. `SURFACE_TOOLS` in `_shared/agent-registry.ts`:
+
+| surface    | tools                                   | why                                                          |
+| ---------- | --------------------------------------- | ------------------------------------------------------------ |
+| `chat`     | reads + `create_task` + `complete_task` | the user sees exactly what happened                          |
+| `voice`    | reads + `create_task`                   | a device in a room may have misheard, and shows nothing back |
+| `telegram` | reads + `create_task` + `complete_task` | a chat log is a record                                       |
+| `planner`  | reads only                              | cron, with nobody present to notice a mistake                |
+
+`delete_task` is absent from all four. The MCP server has it because a developer's editor
+can confirm first; "delete the thing about the client" said to a speaker is not a
+confirmation.
+
+The allowlist is checked at declaration time **and** inside `runTool`. Belt and braces on
+purpose: a model hallucinating a tool name it was never given would otherwise land in the
+dispatcher's default branch, and that branch is holding the user's id.
+
+### Citations are checked, not trusted
+
+Every retrieval tool records what it returned into `run.citations`. `unknownCitations()`
+then reports any URL in the answer that was not among them, and the chat UI renders those
+with a warning rather than stripping them. A fabricated link is worse than a wrong summary:
+the summary is visibly the model's opinion, a URL looks like a fact. Reporting rather than
+stripping also means it lands in the logs instead of only in a user's confusion.
+
+### `mcp_tool_calls.surface`
+
+Two of the four doors carry no API token, so a row with `token_id` null would be
+unattributable. `surface` is `'mcp' | 'chat' | 'voice' | 'telegram' | 'planner'`, defaulted
+to `'mcp'` so the pre-existing rows stay true. It is the only record of what an agent did
+while nobody was watching.
+
+### Gemini tool-calling gotchas (these cost a whole debugging session)
+
+- **`parameters` must be omitted entirely for a no-argument tool.** Declaring
+  `{ type: "object", properties: {} }` makes `generateContent` **hang** — not 400, not 503;
+  the request never returns and the platform kills the invocation with `IDLE_TIMEOUT`.
+  `get_brief` was the only such tool and `plan-day` the only surface that could reach it.
+  `sanitizeDeclarations()` strips an empty schema defensively, because the symptom is so far
+  from the cause.
+- **A hang is different information from a 503.** A 503 means "busy, retry in a second"; a
+  hang means the request went in and nothing came back. So a timeout **abandons that model
+  immediately** rather than spending four more attempts rediscovering it — which is what
+  leaves budget to try the fallback, the thing that actually worked.
+- The model's turn must be echoed back verbatim before the `functionResponse` parts, or
+  Gemini rejects the response as unanchored.
+- The last turn drops the tools entirely. That is what forces prose out of a model which
+  would otherwise reach for one more lookup, so hitting the turn cap still produces a reply.
+- Several calls can arrive in one turn; they run **in sequence**, because they share one
+  database and "complete this, then list what's left" has to see its own write.
+
+### Gemini capacity is a real operational constraint
+
+`gemini-flash-latest` is an alias, so we share its capacity with everyone pointing at the
+same one, and it answers 503 "high demand" often enough to have lost three days of digests
+(2026-10-24, -25, -28). The policy that works:
+
+- **5 attempts, backing off 1s/2s/4s/8s**, jitter 500ms so the per-category ingest fan-out
+  does not retry in lockstep and re-create the spike. The old policy — 3 attempts over about
+  two seconds — was a formality, not a retry.
+- **`GEMINI_FALLBACK_MODEL` = `gemini-flash-lite-latest`**, a different capacity pool, for 2
+  more attempts. A digest ranked by the cheaper model is enormously better than no digest.
+  Verified: plan-day's successful run was answered by the fallback.
+- **Per-call deadline (25s) and a total budget (90s).** An unbounded fetch inside a 150s
+  runtime is not a long wait, it is a lost error.
+- `embedBatch` gets the same policy. On 2026-10-28 ingest pooled 138 articles and embedded
+  only 99 — and an article with no vector is invisible to topic matching and follow-up
+  linking _forever_, because articles are upserted with `ignoreDuplicates` on a unique url.
+
+### Known structural gap
+
+`build-digests` iterates users in one invocation with no per-user time budget, so one slow
+user starves the rest. On 2026-10-28 a leftover QA account spent 140s on Gemini retries and
+the real user's digest row was claimed at 01:32:21 and killed at 01:32:33 — which is why it
+sat in `pending` and never reached `failed`: nothing survived to write a status.
+`ingest-news` solved this with `fanout_ingest_news()`; build-digests has no equivalent yet.
+
+## Vector retrieval (Phase 8)
+
+Embeddings existed from Phase 3 and nothing ever read one. Now:
+
+- **HNSW indexes** on `articles.embedding`, `news_items.embedding` and `topics.embedding`.
+  HNSW over IVFFlat because IVFFlat's lists need retuning as a table grows and HNSW needs no
+  training pass. `vector` lives in the **`extensions`** schema here, so every function pins
+  `set search_path = public, extensions` or the parameter type will not resolve.
+- `match_news_items`, `match_articles`, `match_topics_pool`, `link_followups` — all SECURITY
+  DEFINER with the owner resolved as `coalesce(auth.uid(), p_user_id)`, so a signed-in caller
+  can only ever reach their own rows whatever it passes, while the service-role path still
+  works. `anon` is revoked, so the null-uid branch is unreachable from the publishable key.
+
+### Both thresholds were wrong when guessed — measure, don't intuit
+
+- **Follow-up linking: 0.90, not the 0.85 this file used to specify.** Over 316 embedded
+  items the median nearest cross-digest neighbour sat at **0.8494**, so 0.85 badged 157 of
+  316 — half the feed. Reading the pairs by band: 0.82–0.89 is "same category, unrelated
+  story", 0.90+ is genuinely one thread. 0.90 keeps about 11%.
+- **The link must point backwards.** `digest_id <> digest_id` alone is symmetric, so an item
+  would cite tomorrow's coverage as the story it follows up on. `prior.created_at <
+n.created_at` is what makes the badge mean what it says.
+- **Topic matching: 0.80.** `gemini-embedding-001` at 768 dims compresses _everything_ into
+  roughly 0.75–0.88, so a 0.5 floor ("at least half related") matches the entire archive.
+  Measured over seven probe labels: covered topics peaked at 0.8758 / 0.8498 / 0.8448 /
+  0.8401 (dev tooling, RBI policy, Kubernetes security, Indian semiconductors), uncovered
+  ones at 0.7906 / 0.7817 / 0.7735 (Formula 1, Indian cricket team, cricket results). 0.80
+  sits in that gap so an uncovered topic returns **nothing** rather than the four
+  least-unrelated stories. 0.82 was rejected: it cuts a well-covered topic from 12 to 3.
+- **Topic labels must be embedded with `taskType: "SEMANTIC_SIMILARITY"`**, matching what
+  ingest-news uses for articles. `RETRIEVAL_QUERY`/`RETRIEVAL_DOCUMENT` are deliberately
+  asymmetric; mixing them gives no error, just plausible-looking matches that are wrong.
+
+## Topics: what you follow is a vector query (Phase 8)
+
+A topic is a sentence the reader writes, embedded **once**, matched against the shared pool
+by cosine similarity. One embed call per topic _ever_ and zero per digest, so the cost model
+holds — the marginal cost of a twentieth interest is still nothing. It also turns a
+documented wart into the design: once retrieval is a vector query, "a category's pool can
+contain articles that arrived via another category's feeds" stops being a leak.
+
+Topics **union** with categories rather than replacing them, so an account with no topics
+gets exactly the digest it got before.
+
+- `topics` has **no insert policy**. Creating one means embedding its label, the browser
+  never calls Gemini, and a row without a vector silently matches nothing — so inserts go
+  through the `topics` function on the service role.
+- Updates are narrowed by **column grant** to `enabled` and `weight`, the same way
+  news_items grants only `is_saved`/`read_at`. Editing a label would have to re-embed, so it
+  is a delete and re-add.
+- The **preview** is the point of the UI, not decoration: a topic is a guess until you see it
+  hit something, and an interest we have no feeds for should announce itself rather than
+  contributing nothing to every digest forever. It reports `covered` and the best similarity
+  even when nothing clears the floor.
+
+## Feature switches (Phase 8)
+
+`user_features` + `_shared/features.ts`. The gate is read at **each function's entry point
+through one helper**, for the same reason quiet hours live inside `notify.ts`: it is a
+property of the user, and forgetting it once is the bug that messages someone who switched
+it off. A toggle that only hides a nav item is decoration.
+
+- **An absent row means the default**, so adding a feature needs no backfill and a failed
+  read falls back to the default — "it works" rather than "it stopped for everyone".
+- **`planner` is the only feature defaulting off.** A cron job that messages you at 9am is
+  something you agree to, not something you discover.
+- `filterEnabled()` narrows a list of ids in one query, because the cron functions iterate
+  users and a round trip each is exactly the per-user cost the pipeline avoids.
+- The browser's copy (`FEATURES`/`featureDefault` in `src/lib/queries.ts`) and the Edge copy
+  are a **fourth mirrored pair** — see the drift note below. There is a parity test.
+
 ## Data model (source of truth = migration files)
 
 - `profiles` (id, full_name, timezone default 'Asia/Kolkata', news_profile, onboarded_at)
@@ -366,6 +544,19 @@ Reads carry `readOnlyHint`; `delete_task` carries `destructiveHint`.
   source where no human saw the task before it was saved.
 - `prefetch_feeds` / `prefetch_requests` — plumbing for the Google News workaround below.
   RLS on with **no policies**: service role and SECURITY DEFINER functions only.
+- `topics` (user_id, label, embedding vector(768), enabled, weight) — the interests a reader
+  writes in their own words. HNSW index; unique on `(user_id, lower(btrim(label)))` so
+  "coding" and "Coding" are one interest. **No insert policy**; UPDATE granted on `enabled`
+  and `weight` only.
+- `user_features` (user_id, feature, enabled) — the switches. An absent row means the default
+  resolved in `_shared/features.ts`. Fully owner-managed, unlike the tables above, because
+  changing it is the entire point.
+- `plan_sends` (user_id, sent_for date, unique on both) — the planner's idempotency ledger,
+  claimed before the Gemini call and released on a failed send. `brief_sends`' pattern.
+- `mcp_tool_calls.surface` — which door made the call, defaulted to `'mcp'`.
+- `tasks.source` now also allows `'agent'`: a conversation the user was present for, as
+  distinct from `'ai'` (one parsed sentence they reviewed) and `'mcp'` (nobody watching).
+- `ai_events.kind` now also allows `'agent'` and `'plan'`, each with its own daily limit.
 - `ai_events` (user_id, kind, items_processed, tokens) → Insights page + rate limiting.
   `user_id` is **nullable**: ingest-news is shared work with no owning user, and a null row
   matches no RLS policy, so it stays out of every user's view and rate limit.
@@ -478,6 +669,7 @@ pooled 68 aggregator-tier articles of which 54 carry `url_resolved = false`.
 | `30 1 * * *`   | `build-digests`             | one Gemini call per user over the shared pool                       |
 | `*/15 * * * *` | `send-briefs`               | emails whoever's `email_time` falls in this window                  |
 | `* * * * *`    | `check-reminders`           | the task escalation ladder (see Notifications)                      |
+| `*/15 * * * *` | `plan-day`                  | the morning plan, for users whose `morning_time` is in the window   |
 
 Defined in `20261012072101_cron_schedules.sql`; `check-reminders` was moved to every
 minute by `20261012090000_notifications.sql`. `invoke_edge_function(name, body)` reads
@@ -535,12 +727,24 @@ new path — it is the exact production path.
 8. `mcp` (**no JWT**; `Authorization: Bearer de_...` against `api_tokens`) — the MCP server.
    See the section below; it is the only function that answers a protocol rather than a
    JSON body, and the only one whose caller is a config file rather than a session.
-9. `telegram-webhook` (**no JWT**; `x-telegram-bot-api-secret-token` verified against
-   `TELEGRAM_WEBHOOK_SECRET`) — `/start <code>` linking, `/today` `/tasks` `/brief` `/help`,
-   free text → `parseTasks()` → rows in `tasks` (no preview step in a chat), and the
-   Done / Snooze 1h / Tomorrow buttons. Always answers 200 after the secret check, because a
-   non-200 makes Telegram redeliver the update forever. Also self-registers on
-   `{"register": true}` + `x-cron-secret`.
+9. `agent` (user JWT) — the conversational door. Gemini tool-calling over
+   `_shared/agent-registry.ts` with a per-surface allowlist, a 6-turn cap, and 60
+   conversations/user/day counted off `ai_events`. Gated on the `chat` feature at its entry
+   point. Returns the answer, its citations, the tool calls it made, and any link it cited
+   that no tool returned.
+10. `plan-day` (cron secret, every 15 min) — the autonomous morning planner. Read-only tool
+    allowlist, gated on the `planner` feature (which defaults off), claimed in `plan_sends`
+    before spending, delivered through `notify()` so it inherits quiet hours and the channel
+    fan-out. Verified in production: 3 tool calls in one turn, answered by the fallback
+    model, delivered on email + telegram + push.
+11. `topics` (user JWT) — `preview` / `add` / `reembed`. The only path that creates a topic,
+    because creating one means embedding its label and the browser never calls Gemini.
+12. `telegram-webhook` (**no JWT**; `x-telegram-bot-api-secret-token` verified against
+    `TELEGRAM_WEBHOOK_SECRET`) — `/start <code>` linking, `/today` `/tasks` `/brief` `/help`,
+    free text → `parseTasks()` → rows in `tasks` (no preview step in a chat), and the
+    Done / Snooze 1h / Tomorrow buttons. Always answers 200 after the secret check, because a
+    non-200 makes Telegram redeliver the update forever. Also self-registers on
+    `{"register": true}` + `x-cron-secret`.
 
 ## Source map (`_shared/feeds.ts`) — all URLs verified 2026-10-12
 
@@ -606,11 +810,36 @@ ranking prompt:
   verified byte-identical to the repo; the roll-forward of an all-day yearly task was then
   re-run end to end against the live runtime.
 - Anything mirrored between `src/lib/` and `_shared/` can drift exactly like that. When touching
-  one, check the other: `tz.ts`↔`time.ts`, `task-logic.ts`↔`tasks.ts`.
+  one, check the other: `tz.ts`↔`time.ts`, `task-logic.ts`↔`tasks.ts`, and now the feature
+  defaults in `queries.ts`↔`features.ts`. There is a `mirror-drift-checker` subagent, and a
+  parity test for the feature pair that runs both copies over the same list.
+- **`Date.parse` on a string with no timezone reads as server-local.** V8 parses a zoneless
+  "09 Oct, 2026" leniently as midnight in the _host's_ zone, so `parseFeedDate` resolved a SEBI
+  item to a different calendar day in the Edge runtime (UTC) than on an Asia/Kolkata laptop —
+  and `isRecent()` therefore disagreed with itself depending on where it ran. The day-month-year
+  shape is now matched _before_ `Date.parse` gets a chance, and pinned to UTC. Found by the
+  first test ever written for feeds.ts; production was accidentally right, being UTC.
+- **A missing export is a boot failure, not a type error.** `import { X }` where the module
+  does not export `X` makes the isolate refuse to start, and pg_net sees
+  `{"code":"BOOT_ERROR"}` with nothing in the function logs.
+- **An unbounded `fetch` loses the error.** The wall clock is 150s; a hung upstream call means
+  the platform kills the invocation with `IDLE_TIMEOUT` and nothing that was going to be
+  logged ever is. Every Gemini call carries its own deadline for this reason — keep that true
+  of any new network call.
+- **Read logs with `event_message`, the top-level column.** `log_attributes['event_message']`
+  returns empty strings, which looks exactly like a function that logged nothing. And run
+  `select now()` before choosing a window: one guessed from local time is hours off and
+  returns nothing, which also looks like silence.
 
 ## Frontend routes
 
-`/` landing (logged out) · `/login` · `/onboarding` · `/brief` · `/tasks` · `/news` · `/insights` · `/settings`
+`/` landing (logged out) · `/login` · `/onboarding` · `/brief` · `/tasks` · `/news` · `/ask` ·
+`/insights` · `/settings`
+
+`/ask` is the conversational surface: citation cards, a visible trace of which tools ran and
+which of them wrote something, the remaining daily quota, and dictation via the browser's own
+SpeechRecognition (`src/lib/speech.ts`, behind a support check — Firefox has no
+implementation).
 
 Settings carries the Integrations card (`src/components/integrations-settings.tsx`): create, list
 and revoke MCP tokens, with copy-paste setup for Claude Code and Claude Desktop.
@@ -640,7 +869,8 @@ and revoke MCP tokens, with copy-paste setup for Claude Code and Claude Desktop.
       `due` and `nag:k` rungs (the test task was completed four minutes before it came
       due), `1h`, quiet-hours suppression, snooze and Tomorrow, and the free-text →
       `parse-task` path from a chat.
-- [ ] Phase 6: follow-up linking, Insights page with real data, PWA polish.
+- [ ] Phase 6: Insights page with real data, PWA polish. **Follow-up linking is done** —
+      see Vector retrieval (Phase 8); the threshold it specified turned out to be the median.
       **Browser notifications are done** (2026-10-12): in-app realtime toast + chime +
       tab/favicon badge, `push_subscriptions`, `public/sw.js`, `push-subscribe`,
       `push-action`, the `push` sender in `notify.ts`, and the Settings card with
@@ -659,12 +889,65 @@ and revoke MCP tokens, with copy-paste setup for Claude Code and Claude Desktop.
       save any of user A's tasks or news items, and A's rows were untouched afterwards.
       **Not yet exercised:** a real Claude Code session from a repo (the owner connects their
       own token), and Claude Desktop via `mcp-remote`.
-- [ ] Phase 8 (optional): weekly review email, "ask my news" chat, X highlights
+- [x] Phase 8: **the agent layer.** Vector retrieval (`match_news_items`, `match_articles`,
+      `match_topics_pool`, `link_followups` + HNSW indexes), topics as vector queries, the
+      shared tool registry, `generateWithTools`, the `agent` function and `/ask` with
+      dictation, feature switches, and the `plan-day` autonomous planner.
+      **Verified in production 2026-10-28:** the refactored MCP server byte-identical to its
+      pre-refactor output across get_context / list_tasks / search / create → delete, with
+      `parseInstant` still rejecting an offset-less `due_at` and "coding" still folding into
+      "Coding"; follow-up linking backfilled 14 correct links over 30 digests, every one
+      pointing earlier (the Jio IPO thread came out as Oct 15 → 18 → 25); `build-digests`
+      rebuilt a `ready` digest with 20 items from 105 candidates; `plan-day` called three
+      tools in one turn, fell through to the fallback model, and delivered on email +
+      telegram + push; and the feature gate held — the run before the `planner` row existed
+      spent nothing and said "no users due for a plan".
+      **Also fixed, found while building:** three days of missing digests (a leftover QA
+      account starving the invocation plus a retry policy that was a formality), and a
+      host-timezone bug in `parseFeedDate`.
+      **Not yet exercised:** the `agent` function's happy path from a browser session (a user
+      JWT cannot be minted from a Claude Code session — the owner must try `/ask`), dictation
+      on a real microphone, and the `voice` and `telegram` surfaces of the registry.
+- [ ] Phase 9 (optional): weekly review email, X highlights, Google Calendar, an Alexa skill
+      on the same agent, and a per-user time budget for `build-digests`.
 
 ## Working conventions
 
 - Test each Edge Function by invoking it and reading logs via MCP before wiring cron.
-- `npm run build` and `npm run lint` must pass before committing frontend changes.
+- `npm run build`, `npm run lint` and `npm test` must pass before committing.
 - Shared helpers in `supabase/functions/_shared/` (gemini.ts, email.ts, notify.ts, push.ts,
-  telegram.ts, supabase.ts, feeds.ts, time.ts, tasks.ts, parse-tasks.ts).
+  telegram.ts, supabase.ts, feeds.ts, time.ts, tasks.ts, parse-tasks.ts, agent-tools.ts,
+  agent-registry.ts, features.ts, api-tokens.ts).
 - Log every Gemini call to `ai_events`.
+- **Deploy every function that bundles a changed `_shared/` module**, not only the one you
+  edited: `git grep -l 'shared/<file>' supabase/functions` lists them. A shared fix reaching
+  one function is how the `dayKey` bug survived in half the project.
+- **A threshold is measured, not chosen.** Two in this schema were wrong when intuited (0.85
+  for follow-ups, 0.60 for topics). Run the distribution, then put the numbers in the
+  migration comment so nobody re-derives them.
+
+### Tooling in this repo
+
+- `.claude/skills/` — `add-migration`, `deploy-and-verify-fn`, `add-news-feed`.
+- `.claude/agents/` — `schema-guardian` (reviews a migration against the live database),
+  `mirror-drift-checker` (the four duplicated pairs), `edge-fn-verifier` (proves a deploy).
+- `.claude/hooks/` — `block-destructive-sql.sh` (PreToolUse on the Supabase MCP write tools;
+  strips SQL comments first, so a DROP hidden behind `--` is still caught) and
+  `check-after-edit.sh` (PostToolUse lint + test, never blocking).
+- Deploys need `SUPABASE_ACCESS_TOKEN` in `.env.local`, which is gitignored by `*.local`.
+  **Do not put secrets in `.env`** — that file is tracked, and currently holds only the
+  publishable key and project URL, which are designed to be public.
+
+### Commits
+
+The house style is a **prose-imperative subject with a substantial body explaining why** —
+the tradeoff, the thing rejected, the production fact that forced it. Not Conventional
+Commits. Those bodies are the only record of why a threshold is 0.90 and not 0.85, so write
+them properly the first time.
+
+- `git pull` before starting and before committing; Lovable pushes to the same branch.
+- Never rewrite published history — no force push, no rebase or amend of pushed commits. It
+  rewrites history on Lovable's side and the owner loses their project history.
+- One commit per coherent change; never leave the tree dirty between steps.
+- The tag `pre-hackathon` marks the state before the Phase 8 window, so
+  `git log --oneline pre-hackathon..HEAD` is exactly the work done in it.
