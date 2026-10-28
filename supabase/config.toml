@@ -55,3 +55,14 @@ verify_jwt = false
 # Gemini server-side — the browser never holds that key.
 [functions.topics]
 verify_jwt = true
+
+# agent is the conversational door and is called from the browser with the user's session
+# JWT. The handler also resolves the user itself with requireUser(), because the tool
+# registry needs the id to scope every read.
+[functions.agent]
+verify_jwt = true
+
+# plan-day is cron-only and authenticates with x-cron-secret, like the rest of the
+# pipeline: pg_cron -> net.http_post sends no user JWT.
+[functions.plan-day]
+verify_jwt = false
