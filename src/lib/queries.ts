@@ -829,3 +829,70 @@ function readFnError(error: unknown, fallback: string): string {
   const msg = (error as { message?: string })?.message;
   return msg && !msg.includes("non-2xx") ? msg : fallback;
 }
+
+// ----------------------------------------------------------------- the assistant
+
+export type AgentCitation = {
+  title: string;
+  url: string;
+  source: string | null;
+  published_at: string | null;
+  via_google_news: boolean;
+};
+
+export type AgentToolCall = {
+  name: string;
+  ok: boolean;
+  error: string | null;
+  mutating: boolean;
+  duration_ms: number;
+};
+
+export type AgentReply = {
+  answer: string;
+  surface: string;
+  citations: AgentCitation[];
+  tool_calls: AgentToolCall[];
+  unverified_links: string[];
+  turns: number;
+  duration_ms: number;
+  usage: { inputTokens: number | null; outputTokens: number | null };
+  quota: { used: number; limit: number };
+};
+
+export type AgentTurn = { role: "user" | "model"; text: string };
+
+/**
+ * Ask the assistant.
+ *
+ * Not a React Query cache entry: every call is a new question with a side effect
+ * (it may create a task), so caching it would be wrong in both directions. The
+ * conversation lives in component state and is sent back each time, which is also what
+ * keeps the server stateless — the same reason the MCP server has no sessions.
+ *
+ * Any mutation the assistant performed invalidates tasks and tags, because the chat
+ * window is not the only view of them.
+ */
+export function useAsk() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { message: string; history: AgentTurn[]; surface?: string }) => {
+      const { data, error } = await supabase.functions.invoke("agent", {
+        body: {
+          message: input.message,
+          history: input.history,
+          surface: input.surface ?? "chat",
+        },
+      });
+      if (error) throw new Error(readFnError(error, "The assistant could not answer"));
+      return data as AgentReply;
+    },
+    onSuccess: (reply) => {
+      if (reply.tool_calls.some((c) => c.mutating && c.ok)) {
+        qc.invalidateQueries({ queryKey: qk.tasks });
+        qc.invalidateQueries({ queryKey: qk.tags });
+      }
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+}
