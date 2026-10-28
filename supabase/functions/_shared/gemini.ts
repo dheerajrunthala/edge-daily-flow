@@ -66,6 +66,36 @@ const RETRYABLE = new Set([429, 500, 502, 503, 504]);
 const MAX_ATTEMPTS = 5;
 const FALLBACK_ATTEMPTS = 2;
 
+/**
+ * Deadline for a single generateContent call.
+ *
+ * An unbounded fetch inside a runtime with a 150s wall clock is not a long wait, it is a
+ * lost error: the platform kills the isolate with IDLE_TIMEOUT and nothing that was going
+ * to be logged ever is, so the failure arrives as silence. plan-day's first real run
+ * burned all 150s this way and left no trace of which call hung.
+ *
+ * 40s is far longer than a Flash completion needs and still leaves room for retries and
+ * several tool round trips inside one invocation.
+ */
+const CALL_TIMEOUT_MS = 25_000;
+
+/**
+ * Total time postGenerate may spend on one logical call, across every retry and both
+ * models.
+ *
+ * Needed because the per-call deadline alone does not bound the whole: five attempts at
+ * 25s is 125s, which plus the tool round trips overruns the runtime's 150s wall clock and
+ * loses the error again. Retrying past this budget cannot help anyone — the caller is
+ * already out of time.
+ */
+const TOTAL_BUDGET_MS = 90_000;
+
+/** Caller's signal, plus our own deadline — whichever trips first wins. */
+function withDeadline(signal: AbortSignal | undefined, ms: number): AbortSignal {
+  const deadline = AbortSignal.timeout(ms);
+  return signal ? AbortSignal.any([signal, deadline]) : deadline;
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
@@ -89,16 +119,43 @@ async function postGenerate(
 
   let lastStatus = 0;
   let lastBody = "";
+  const startedAt = Date.now();
+  const outOfTime = () => Date.now() - startedAt > TOTAL_BUDGET_MS;
 
   for (const [planIndex, step] of plan.entries()) {
     for (let attempt = 1; attempt <= step.attempts; attempt++) {
-      const res = await fetch(`${API_ROOT}/models/${step.model}:generateContent`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-goog-api-key": apiKey() },
-        signal: signal ?? null,
-        body: payload,
-      });
-      const body = await res.text();
+      if (outOfTime()) {
+        console.warn(`gemini: out of retry budget after ${Date.now() - startedAt}ms`);
+        throw new GeminiError(
+          `Gemini did not answer within ${TOTAL_BUDGET_MS}ms (last status ${lastStatus || "none"})`,
+          lastStatus || 504,
+        );
+      }
+      let res: Response;
+      let body: string;
+      try {
+        res = await fetch(`${API_ROOT}/models/${step.model}:generateContent`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-goog-api-key": apiKey() },
+          signal: withDeadline(signal, CALL_TIMEOUT_MS),
+          body: payload,
+        });
+        body = await res.text();
+      } catch (err) {
+        // A timeout here is worth naming, because the alternative is the platform killing
+        // the whole invocation and the logs showing nothing at all.
+        const reason = err instanceof Error ? err.name : String(err);
+        console.warn(`gemini ${step.model} aborted after ${CALL_TIMEOUT_MS}ms (${reason})`);
+        lastStatus = 504;
+        lastBody = `request aborted: ${reason}`;
+        // Abandon this model rather than retrying it. A request that hangs to the
+        // deadline is different information from a 503: the 503 is the endpoint telling
+        // us it is busy and will likely be free in a second, while a hang means the
+        // request went in and nothing came back. Spending the remaining four attempts —
+        // 100s of a 150s wall clock — rediscovering that leaves no budget to try the
+        // other model, which is the thing most likely to actually work.
+        break;
+      }
 
       if (res.ok) {
         if (planIndex > 0) {
@@ -267,7 +324,7 @@ export async function embedBatch(
     res = await fetch(`${API_ROOT}/${model}:batchEmbedContents`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-goog-api-key": apiKey() },
-      signal: opts.signal ?? null,
+      signal: withDeadline(opts.signal, CALL_TIMEOUT_MS),
       body: payload,
     });
     body = await res.text();
@@ -324,7 +381,17 @@ const EMBED_MAX_CHARS = 2000;
 export type ToolDeclaration = {
   name: string;
   description: string;
-  parameters: Record<string, unknown>;
+  /**
+   * Omitted entirely for a function that takes no arguments.
+   *
+   * Not a style choice. Declaring `{ type: "object", properties: {} }` for a
+   * no-argument tool makes generateContent hang — not 400, not 503: the request simply
+   * never returns, and the platform eventually kills the invocation with IDLE_TIMEOUT.
+   * That cost two debugging rounds on plan-day, whose allowlist includes the one tool
+   * with no parameters. sanitizeDeclarations() below strips an empty schema defensively
+   * so this cannot come back through a caller that did not read this comment.
+   */
+  parameters?: Record<string, unknown>;
 };
 
 /** What the model actually did, in order. The caller logs this and shows it to the user. */
@@ -375,6 +442,8 @@ export async function generateWithTools(opts: {
   const model = opts.model ?? GEMINI_PARSE_MODEL;
   const maxTurns = Math.max(1, Math.min(opts.maxTurns ?? MAX_TOOL_TURNS, MAX_TOOL_TURNS));
 
+  const tools = sanitizeDeclarations(opts.tools);
+
   const contents: { role: string; parts: unknown[] }[] = opts.messages.map((m) => ({
     role: m.role,
     parts: [{ text: m.text }],
@@ -417,6 +486,9 @@ export async function generateWithTools(opts: {
 
     const parts = envelope.candidates?.[0]?.content?.parts ?? [];
     const wanted = parts.filter((p) => p.functionCall?.name);
+    console.log(
+      `agent turn ${turns}/${maxTurns}: ${wanted.length ? wanted.map((p) => p.functionCall?.name).join(", ") : "final answer"}`,
+    );
 
     if (wanted.length === 0) {
       const text = parts
@@ -454,4 +526,23 @@ export async function generateWithTools(opts: {
   }
 
   throw new GeminiError("Tool loop ended without a final answer");
+}
+
+/**
+ * Drop a `parameters` schema that declares no properties.
+ *
+ * generateContent hangs on `{ type: "object", properties: {} }` rather than rejecting it,
+ * so this is the difference between a working tool loop and an invocation killed by the
+ * platform with nothing in the logs. Done here rather than only at the declaration site
+ * because the symptom is so far removed from the cause.
+ */
+function sanitizeDeclarations(tools: ToolDeclaration[]): ToolDeclaration[] {
+  return tools.map((t) => {
+    const props = (t.parameters?.properties ?? {}) as Record<string, unknown>;
+    if (!t.parameters || Object.keys(props).length === 0) {
+      const { parameters: _drop, ...rest } = t;
+      return rest;
+    }
+    return t;
+  });
 }

@@ -16,4 +16,6 @@ export const qk = {
   saved: ["news_items", "saved"] as const,
   completions: ["completions"] as const,
   notificationActions: ["notification_actions"] as const,
+  topics: ["topics"] as const,
+  features: ["user_features"] as const,
 };

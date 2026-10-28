@@ -119,7 +119,8 @@ const DECLARATIONS: Record<string, ToolDeclaration> = {
     description:
       "Today at a glance: the digest summary, today's tasks, overdue items and birthdays in " +
       "the next week. The same content as the user's morning email.",
-    parameters: { type: "object", properties: {} },
+    // No `parameters` key at all — see the note on ToolDeclaration. An empty schema makes
+    // generateContent hang instead of answering.
   },
   create_task: {
     name: "create_task",

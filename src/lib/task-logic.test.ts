@@ -198,3 +198,38 @@ describe("displayGroup", () => {
     expect(displayGroup(t, TZ, new Date("2026-10-12T06:00:00.000Z"))).toBe("done");
   });
 });
+
+// ---------------------------------------------------------------- feature defaults
+//
+// The browser's feature defaults and the Edge runtime's must agree: the switch the user
+// sees in Settings and the gate the cron reads before messaging them are the same
+// promise. They are two files (src/lib/queries.ts and
+// supabase/functions/_shared/features.ts) for the usual reason — the Edge copy cannot
+// import from src/ — which is exactly the mirroring CLAUDE.md warns drifts.
+
+describe("feature defaults mirror the Edge copy", () => {
+  it("defaults the planner off and everything else on", async () => {
+    const { FEATURES, featureDefault } = await import("./queries");
+    for (const f of FEATURES) {
+      expect(featureDefault(f), f).toBe(f !== "planner");
+    }
+  });
+
+  it("lists exactly the features the Edge module lists", async () => {
+    const [{ FEATURES }, edge] = await Promise.all([
+      import("./queries"),
+      import("../../supabase/functions/_shared/features.ts"),
+    ]);
+    expect([...FEATURES].sort()).toEqual([...edge.ALL_FEATURES].sort());
+  });
+
+  it("agrees with the Edge module on every default", async () => {
+    const [{ FEATURES, featureDefault }, edge] = await Promise.all([
+      import("./queries"),
+      import("../../supabase/functions/_shared/features.ts"),
+    ]);
+    for (const f of FEATURES) {
+      expect(featureDefault(f), f).toBe(edge.defaultFor(f));
+    }
+  });
+});
