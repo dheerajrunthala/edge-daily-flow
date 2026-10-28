@@ -116,6 +116,16 @@ export async function checkRateLimit(
 }
 
 /**
+ * Which front door made the call.
+ *
+ * Worth recording because the same tool reached through different doors has different
+ * blast radius: `mcp` is a developer's editor, `voice` is a device in a room that may
+ * have misheard, and `planner` is cron acting with nobody present. Without this column
+ * the audit trail cannot answer "what did it do while I was asleep".
+ */
+export type ToolSurface = "mcp" | "chat" | "voice" | "telegram" | "planner";
+
+/**
  * Record one tool call. Awaited rather than fired and forgotten, because this is the table
  * the rate limit counts — the same reasoning as logAiEvent — and it is the only audit
  * trail of what an agent did while nobody was watching.
@@ -129,6 +139,7 @@ export async function logToolCall(
     ok: boolean;
     error?: string | null;
     durationMs?: number;
+    surface?: ToolSurface;
   },
 ): Promise<void> {
   const { error } = await admin.from("mcp_tool_calls").insert({
@@ -138,6 +149,7 @@ export async function logToolCall(
     ok: entry.ok,
     error: entry.error ? entry.error.slice(0, 500) : null,
     duration_ms: entry.durationMs ?? null,
+    surface: entry.surface ?? "mcp",
   });
   if (error) console.error("mcp_tool_calls insert failed", error.message);
 }
