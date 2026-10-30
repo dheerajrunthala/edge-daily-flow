@@ -6,16 +6,16 @@ To run a scheduled job manually, call the same SQL cron calls — it is the exac
 
 ### Cron (UTC)
 
-| when           | job                         | what                                                                 |
-| -------------- | --------------------------- | -------------------------------------------------------------------- |
-| `50 0 * * *`   | `prefetch-aggregator-feeds` | pg_net fetches the aggregator tier                                   |
-| `0 1 * * *`    | `fanout-ingest-news`        | `fanout_ingest_news()` → one ingest-news call per followed category  |
-| `30 1 * * *`   | `build-digests`             | `fanout_build_digests()` → one invocation **per user** over the pool |
-| `*/15 * * * *` | `send-briefs`               | emails whoever's `email_time` falls in this window                   |
-| `* * * * *`    | `check-reminders`           | the task escalation ladder (see Notifications)                       |
-| `*/15 * * * *` | `plan-day`                  | the morning plan, for users whose `morning_time` is in the window    |
-| `0 3 * * *`    | `build-digests-retry`       | the same fan-out again; a no-op for any digest already `ready`       |
-| `*/10 * * * *` | `repair-embeddings`         | 90 vectorless pooled articles per run, so a lost vector self-heals   |
+| when            | job                         | what                                                                 |
+| --------------- | --------------------------- | -------------------------------------------------------------------- |
+| `50 0 * * *`    | `prefetch-aggregator-feeds` | pg_net fetches the aggregator tier                                   |
+| `0 1 * * *`     | `fanout-ingest-news`        | `fanout_ingest_news()` → one ingest-news call per followed category  |
+| `30 1 * * *`    | `build-digests`             | `fanout_build_digests()` → one invocation **per user** over the pool |
+| `*/15 * * * *`  | `send-briefs`               | emails whoever's `email_time` falls in this window                   |
+| `* * * * *`     | `check-reminders`           | the task escalation ladder (see Notifications)                       |
+| `*/15 * * * *`  | `plan-day`                  | the morning plan, for users whose `morning_time` is in the window    |
+| `0 3 * * *`     | `build-digests-retry`       | the same fan-out again; a no-op for any digest already `ready`       |
+| `:07 :17 :27 …` | `repair-embeddings`         | 90 vectorless pooled articles per run, so a lost vector self-heals   |
 
 Defined in `20261012072101_cron_schedules.sql`; `check-reminders` was moved to every
 minute by `20261012090000_notifications.sql`. `invoke_edge_function(name, body)` reads
@@ -91,3 +91,19 @@ new path — it is the exact production path.
     Done / Snooze 1h / Tomorrow buttons. Always answers 200 after the secret check, because a
     non-200 makes Telegram redeliver the update forever. Also self-registers on
     `{"register": true}` + `x-cron-secret`.
+
+## Why `repair-embeddings` runs at :07 and not `*/10`
+
+`*/10` fires at minute **:00 of every hour** — including 01:00 UTC, the exact minute
+`fanout-ingest-news` starts one ingest invocation per category, all of them embedding at once.
+The repair's 90 requests would then compete with ingest's own for the same 100-per-minute free
+tier quota, and the articles that lost would be _fresh_ ones — pooled vectorless and therefore
+permanent. A repair job that causes the damage it repairs.
+
+The odd offsets go further than avoiding :00: they share a minute with **no** other job here.
+Minutes :15 and :45 would in fact have been safe, because `send-briefs` makes no Gemini call and
+the planner's read-only allowlist never embeds — but a schedule that is safe only _because of a
+correct argument about what other jobs do_ stops being safe when one of them changes.
+
+Caught by the `schema-guardian` agent before the migration was applied; it could only know by
+querying the live `cron.job` table and reading the function's own constants.
