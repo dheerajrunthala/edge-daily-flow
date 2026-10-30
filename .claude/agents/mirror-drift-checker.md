@@ -5,6 +5,10 @@ tools: Read, Grep, Glob, Bash
 model: sonnet
 ---
 
+> **Runs on sonnet.** Comparison that needs reasoning, not just diffing. The canonical bug it exists to catch was a one-word signature difference whose consequence was a RangeError three call-layers away. Spotting that the texts differ is haiku work; spotting that the *behaviour* differs on an ISO string input is not.
+>
+> See [docs/model-routing.md](../../docs/model-routing.md).
+
 This repo keeps three pairs of modules deliberately duplicated, because the browser and
 the Deno Edge runtime cannot import from each other. Each pair must agree behaviourally.
 Your job is to find where they no longer do.
