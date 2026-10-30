@@ -61,9 +61,20 @@ A toggle that only hides a nav item is decoration.
 **7. The browser never calls a model and never holds a key.** Every AI call is server-side.
 That is why `topics` has no insert policy — creating one requires an embedding.
 
-**8. Secrets never enter code, commits, or any `.md`.** `.env` **is tracked** and holds only
-the publishable key and project URL, which are designed to be public. Real secrets go in
-`.env.local` (gitignored by `*.local`) or the platform's secret store.
+**8. Secrets never enter code, commits, or any `.md`.** Real secrets go in `.env.local`
+(gitignored by `*.local`) or the platform's secret store, set with `supabase secrets set`.
+
+**`.env` is tracked on purpose — do not "fix" it.** Lovable creates and syncs it and the build
+expects it in the repo, so untracking it breaks both. It holds only `SUPABASE_URL`,
+`SUPABASE_PROJECT_ID` and `SUPABASE_PUBLISHABLE_KEY` — the anon key, which ships inside the
+browser bundle anyway. It identifies the project; it authorises nothing. Access is enforced by
+RLS on every table plus the function grants.
+
+Verified: the only JWT ever committed to this repo is role `anon`, and no `sbp_`/`AIza`/bot
+token/`de_` value appears anywhere in history. The repo is safe to be public with `.env` in it.
+Before concluding otherwise, check the role claim and run
+`get_advisors(type: "security")` — and read the "revoke execute from anon" entry in
+[docs/gotchas.md](docs/gotchas.md), because the grants are where a real hole actually hid.
 
 ---
 
