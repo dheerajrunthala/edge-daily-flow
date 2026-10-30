@@ -28,7 +28,7 @@ import { GEMINI_FALLBACK_MODEL, generateWithTools } from "../_shared/gemini.ts";
 import { isEnabled } from "../_shared/features.ts";
 import { logToolCall } from "../_shared/api-tokens.ts";
 import { HttpError, countAiEvents, json, logAiEvent, serviceClient } from "../_shared/supabase.ts";
-import { offsetLabel } from "../_shared/time.ts";
+import { dayKey, offsetLabel } from "../_shared/time.ts";
 
 /** Spoken turns a user may have per day. Shares the agent's budget, counted the same way. */
 const DAILY_LIMIT = 60;
@@ -362,28 +362,66 @@ async function fastAnswer(
   };
 
   if (asksTasks) {
-    const res = (await call("list_tasks", { limit: 50 })) as {
-      tasks?: { title: string; group: string; due_label: string }[];
+    // How far ahead the question is asking about. null means the question named a horizon
+    // this path does not understand, in which case it must not answer at all — see below.
+    const horizon = parseHorizon(u);
+    if (horizon === null) return null;
+
+    const res = (await call("list_tasks", { limit: 100 })) as {
+      tasks?: { title: string; group: string; due_label: string; due_at: string | null }[];
     };
     const all = res.tasks ?? [];
-    const overdue = all.filter((t) => t.group === "overdue");
-    const today = all.filter((t) => t.group === "today");
 
-    if (overdue.length === 0 && today.length === 0) {
-      const open = all.length;
-      return open === 0
-        ? "Nothing on your list at all. Enjoy it."
-        : `Nothing due today. You have ${say(open, "task")} further out.`;
+    const today = dayKey(new Date(), run.ctx.tz);
+    const within = (t: { due_at: string | null }, days: number) => {
+      if (!t.due_at) return false;
+      const d = dayKey(t.due_at, run.ctx.tz);
+      return d >= today && d <= addDays(today, days);
+    };
+
+    const overdue = all.filter((t) => t.group === "overdue");
+
+    // "overdue" on its own is a different question from "what's coming up", and answering
+    // it with a week's worth of upcoming work is not what was asked.
+    if (horizon.overdueOnly) {
+      return overdue.length === 0
+        ? "Nothing overdue. You are on top of it."
+        : `${say(overdue.length, "overdue task")}: ${titles(overdue)}.`;
     }
 
+    const due = all.filter((t) => within(t, horizon.days));
     const parts: string[] = [];
-    // Overdue first, because that is the thing a person needs to hear first.
+
+    // Overdue first, always, because that is what a person needs to hear first — and it is
+    // reported even when they asked about the days ahead, since it is strictly worse news.
     if (overdue.length > 0) {
       parts.push(`${say(overdue.length, "overdue task")}: ${titles(overdue)}.`);
     }
-    if (today.length > 0) {
-      parts.push(`Due today, ${say(today.length, "task")}: ${titles(today)}.`);
+
+    if (due.length > 0) {
+      // Each title carries its own due label over more than one day, otherwise "three tasks
+      // in the next three days" tells the listener nothing about when.
+      const body =
+        horizon.days === 0
+          ? titles(due)
+          : due
+              .slice(0, 4)
+              .map((t) => `${t.title.replace(/\s+/g, " ").trim()}, ${t.due_label}`)
+              .join("; ") + (due.length > 4 ? `; plus ${say(due.length - 4, "more")}` : "");
+      parts.push(`${horizon.label}, ${say(due.length, "task")}: ${body}.`);
+    } else if (overdue.length === 0) {
+      const laterCount = all.filter((t) => t.due_at && !within(t, horizon.days)).length;
+      const someday = all.filter((t) => !t.due_at).length;
+      if (all.length === 0) return "Nothing on your list at all. Enjoy it.";
+      const tail = [
+        laterCount > 0 ? `${say(laterCount, "task")} further out` : "",
+        someday > 0 ? `${say(someday, "task")} with no date` : "",
+      ].filter(Boolean);
+      return `Nothing ${horizon.label.toLowerCase()}.${tail.length ? ` You have ${tail.join(" and ")}.` : ""}`;
+    } else {
+      parts.push(`Nothing ${horizon.label.toLowerCase()}.`);
     }
+
     return parts.join(" ");
   }
 
@@ -404,6 +442,63 @@ async function fastAnswer(
     `Today's top ${say(top.length, "story")}. ${top.map((t, i) => `${i + 1}. ${t}`).join(" ")}` +
     (why ? ` On the first: ${why}` : "")
   );
+}
+
+/** Spoken numbers, because Alexa transcribes "three" as a word about as often as a digit. */
+const WORD_NUMBERS: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  ten: 10,
+  fourteen: 14,
+};
+
+/**
+ * How far ahead a spoken question is asking about.
+ *
+ * Returns `null` when the question clearly names a horizon this path cannot answer, which
+ * makes the caller fall through to the agent. That is the important case: the first version
+ * recognised only "overdue" and "today", so "what is due in the next three days" matched on
+ * the word "due" and was answered with "nothing due today" — confidently, and wrongly. A
+ * fast path that answers a question it did not understand is worse than a slow one, because
+ * the listener has no way to tell it misheard the question rather than the facts.
+ */
+function parseHorizon(u: string): { days: number; label: string; overdueOnly?: boolean } | null {
+  if (/\boverdue\b/.test(u) && !/\b(today|tomorrow|week|next|coming|upcoming)\b/.test(u)) {
+    return { days: 0, label: "Overdue", overdueOnly: true };
+  }
+  if (/\btomorrow\b/.test(u)) return { days: 1, label: "By tomorrow" };
+
+  const n = /\bnext (\d+|one|two|three|four|five|six|seven|ten|fourteen)\s*(day|days)\b/.exec(u);
+  if (n) {
+    const days = Number(n[1]) || WORD_NUMBERS[n[1]] || 0;
+    if (days > 0) return { days, label: `In the next ${days} days` };
+  }
+  if (/\b(this |next |coming )?(week|7 days|seven days)\b/.test(u)) {
+    return { days: 7, label: "This week" };
+  }
+  if (/\b(month|30 days|thirty days)\b/.test(u)) return { days: 30, label: "This month" };
+  if (/\b(today|now|right now)\b/.test(u)) return { days: 0, label: "Due today" };
+
+  // A horizon word with no number the parser recognises — hand it to the agent rather than
+  // silently answering about today.
+  if (/\b(next|upcoming|coming|later|ahead|rest of)\b/.test(u)) return null;
+
+  // No horizon named at all: "what are my tasks" means today, which is what a person means
+  // when they ask a speaker in the morning.
+  return { days: 0, label: "Due today" };
+}
+
+/** "YYYY-MM-DD" plus n days, staying in string space so it compares with dayKey directly. */
+function addDays(key: string, n: number): string {
+  const [y, m, d] = key.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + n);
+  return dt.toISOString().slice(0, 10);
 }
 
 /** "1 task" / "3 tasks" — because "1 tasks" is the kind of thing a speaker makes obvious. */
