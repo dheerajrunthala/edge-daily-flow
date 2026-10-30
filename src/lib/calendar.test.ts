@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCalendarEvent, downloadTaskAsIcs } from "@/lib/calendar";
+import { buildCalendarEvent, downloadTaskAsIcs, googleCalendarUrl } from "@/lib/calendar";
 import type { Task } from "@/lib/task-logic";
 
 const TZ = "Asia/Kolkata";
@@ -213,4 +213,55 @@ describe("downloadTaskAsIcs", () => {
   // Note: downloadTaskAsIcs uses DOM APIs (document.createElement, etc.)
   // which are available in vitest's environment, but actual download behavior
   // cannot be unit tested without mocking. This test verifies the error path.
+});
+
+describe("googleCalendarUrl", () => {
+  it("builds a timed-event link with a UTC range an hour apart and ctz set", () => {
+    const task = createTask({
+      title: "Review the Dubai estimates",
+      due_at: "2026-10-31T03:30:00.000Z",
+      all_day: false,
+      notes: null,
+    });
+
+    const url = googleCalendarUrl(task, TZ);
+    const params = new URL(url).searchParams;
+
+    expect(url).toMatch(/^https:\/\/calendar\.google\.com\/calendar\/render\?/);
+    expect(params.get("action")).toBe("TEMPLATE");
+    expect(params.get("dates")).toBe("20261031T033000Z/20261031T043000Z");
+    expect(params.get("ctz")).toBe(TZ);
+  });
+
+  it("builds an all-day link with a plain date range, end on the next day", () => {
+    const task = createTask({
+      title: "Birthday",
+      due_at: "2026-10-30T18:30:00.000Z", // 2026-10-31 00:00:00 IST
+      all_day: true,
+    });
+
+    const url = googleCalendarUrl(task, TZ);
+    const params = new URL(url).searchParams;
+
+    expect(params.get("dates")).toBe("20261031/20261101");
+  });
+
+  it("round-trips a title and notes containing characters that need encoding", () => {
+    const task = createTask({
+      title: "Call; check, confirm & review",
+      notes: 'Notes with "quotes" & an & ampersand, plus a comma',
+    });
+
+    const url = googleCalendarUrl(task, TZ);
+    const params = new URL(url).searchParams;
+
+    expect(params.get("text")).toBe("Call; check, confirm & review");
+    expect(params.get("details")).toBe('Repo: Notes with "quotes" & an & ampersand, plus a comma');
+  });
+
+  it("throws when task has no due_at", () => {
+    const task = createTask({ due_at: null });
+
+    expect(() => googleCalendarUrl(task, TZ)).toThrow("Task has no due_at");
+  });
 });
