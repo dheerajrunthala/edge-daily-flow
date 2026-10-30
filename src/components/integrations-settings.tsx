@@ -291,44 +291,48 @@ function TokenRow({ token }: { token: ApiTokenRow }) {
   const revoked = !!token.revoked_at;
 
   return (
-    <div className="flex items-center gap-3 p-3">
-      <KeyRound
-        className={cn("size-4 shrink-0", revoked ? "text-muted-foreground" : "text-primary")}
-      />
-      <div className="min-w-0 flex-1">
-        <p className={cn("truncate text-sm", revoked && "text-muted-foreground line-through")}>
-          {token.name}
-        </p>
-        <p className="text-xs text-muted-foreground">
-          <code>{token.prefix}…</code>
-          {revoked
-            ? " · revoked"
-            : token.last_used_at
-              ? ` · last used ${relativeTime(token.last_used_at)}`
-              : " · never used"}
-        </p>
+    <div className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex min-w-0 items-center gap-3">
+        <KeyRound
+          className={cn("size-4 shrink-0", revoked ? "text-muted-foreground" : "text-primary")}
+        />
+        <div className="min-w-0">
+          <p className={cn("truncate text-sm", revoked && "text-muted-foreground line-through")}>
+            {token.name}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            <code>{token.prefix}…</code>
+            {revoked
+              ? " · revoked"
+              : token.last_used_at
+                ? ` · last used ${relativeTime(token.last_used_at)}`
+                : " · never used"}
+          </p>
+        </div>
       </div>
-      {!revoked && (
+      <div className="flex shrink-0 items-center justify-end gap-2">
+        {!revoked && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-9 rounded-xl"
+            disabled={revoke.isPending}
+            onClick={() => revoke.mutate(token.id)}
+          >
+            {revoke.isPending && <Loader2 className="animate-spin" />} Revoke
+          </Button>
+        )}
         <Button
-          variant="outline"
-          size="sm"
-          className="h-9 shrink-0 rounded-xl"
-          disabled={revoke.isPending}
-          onClick={() => revoke.mutate(token.id)}
+          variant="ghost"
+          size="icon"
+          aria-label="Delete token"
+          className="size-9 rounded-lg text-muted-foreground"
+          disabled={remove.isPending}
+          onClick={() => remove.mutate(token.id)}
         >
-          {revoke.isPending && <Loader2 className="animate-spin" />} Revoke
+          <Trash2 />
         </Button>
-      )}
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label="Delete token"
-        className="size-9 shrink-0 rounded-lg text-muted-foreground"
-        disabled={remove.isPending}
-        onClick={() => remove.mutate(token.id)}
-      >
-        <Trash2 />
-      </Button>
+      </div>
     </div>
   );
 }
