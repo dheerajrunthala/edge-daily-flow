@@ -19,7 +19,7 @@ carries the decisions, and the code only shows the outcome.
 | work on the agent, `/ask` or the planner | [docs/agent-layer.md](docs/agent-layer.md)                                              |
 | work on the MCP server                   | [docs/mcp-server.md](docs/mcp-server.md) · [docs/mcp-workflow.md](docs/mcp-workflow.md) |
 | work on reminders or any channel         | [docs/notifications.md](docs/notifications.md)                                          |
-| write tests                              | skill `write-tests` · [docs/testing.md](docs/testing.md)                                |
+| write or run tests                       | skill `write-tests` · [docs/testing.md](docs/testing.md)                                |
 | start a piece of work                    | skill `start-phase` · [docs/plans/](docs/plans/)                                        |
 | land a change                            | skill `ship-change`                                                                     |
 | debug something that does nothing        | **[docs/gotchas.md](docs/gotchas.md)**                                                  |
@@ -104,6 +104,19 @@ Secrets the platform holds: `GEMINI_API_KEY`, `GMAIL_USER`, `GMAIL_APP_PASSWORD`
 `CRON_SECRET`, `APP_URL`, `TELEGRAM_*`, `VAPID_*`. Vault holds `project_url` and `cron_secret`
 for pg_cron. Cron-invoked functions require `x-cron-secret`; user functions require a user JWT;
 the MCP server uses a `de_…` token hashed into `api_tokens`.
+
+## Tests
+
+```bash
+npm test                  # 159 cases, 11 files, ~1.5s — the gate, no setup needed
+npm run test:contract     # all 12 Edge Functions boot and reach their handler
+npm run test:isolation    # cross-account security; needs two de_ tokens, exits 2 if unrun
+scripts/db-checks.sql     # 13 DB assertions via the Supabase MCP; a pass is silence
+```
+
+The last three exist because the riskiest code cannot be reached by a unit test: the Edge
+runtime does not run locally, and RLS is database behaviour. Details and what is deliberately
+not covered: [docs/testing.md](docs/testing.md).
 
 ## Commits
 
