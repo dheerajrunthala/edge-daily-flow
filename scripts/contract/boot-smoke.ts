@@ -60,7 +60,7 @@ type Probe = {
   expect: string;
 };
 
-/** All twelve functions under supabase/functions/, excluding _shared. */
+/** All thirteen functions under supabase/functions/, excluding _shared. */
 const PROBES: Probe[] = [
   // verify_jwt = true. The anon key satisfies the gateway; requireUser() then rejects it.
   {
@@ -143,6 +143,17 @@ const PROBES: Probe[] = [
     gate: "wrong webhook secret",
     headers: { "x-telegram-bot-api-secret-token": "boot-smoke-wrong" },
     expect: "Bad webhook secret",
+  },
+  // alexa-skill is reached by Amazon's servers with the account-linking token in the request
+  // BODY, not a header — so there is no credential to get wrong. An empty body has no
+  // accessToken, and the handler answers with a LinkAccount card: a 200 that only the
+  // handler can produce, and it writes nothing. Probing it with a bad token instead would be
+  // worse, because requireApiToken() is caught and returns the same card.
+  {
+    fn: "alexa-skill",
+    gate: "no account-linking token in the request body",
+    headers: {},
+    expect: "link your Daily Edge account",
   },
 ];
 

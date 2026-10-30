@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:contract": "node --experimental-strip-types scripts/contract/boot-smoke.ts",
-    "test:isolation": "node --experimental-strip-types scripts/contract/mcp-isolation.ts"
+    "test:isolation": "node --experimental-strip-types scripts/contract/mcp-isolation.ts",
+    "verify": "bash scripts/verify-claims.sh"
   },
   "overrides": {
     "rolldown": "1.2.1"

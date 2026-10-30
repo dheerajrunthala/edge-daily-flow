@@ -60,7 +60,7 @@ Supabase (Postgres 17, pgvector/HNSW, pg_cron, pg_net, Vault, Auth, Edge Functio
 Google Gemini (parsing, ranking, agent tool-calling, embeddings) · Model Context Protocol ·
 Gmail SMTP · Telegram Bot API · Web Push
 
-**12 Edge Functions · 20 migrations · 159 tests · 6 skills · 6 subagents · 2 hooks**
+**13 Edge Functions · 20 migrations · 240 tests · 6 skills · 6 subagents · 2 hooks**
 
 ---
 
@@ -69,9 +69,10 @@ Gmail SMTP · Telegram Bot API · Web Push
 ```bash
 npm install
 npm run dev          # http://localhost:3000
-npm test             # 159 tests across 11 files, ~1.5s
+npm test             # 240 tests across 13 files, ~2s
 npm run lint         # 0 errors (12 pre-existing shadcn warnings)
 npm run build
+npm run verify       # checks every claim this README makes — see below
 ```
 
 The frontend needs `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` — both already in `.env`,
@@ -92,7 +93,7 @@ See [docs/operations.md](docs/operations.md).
 ## Tests
 
 ```bash
-npm test              # 159 tests, 11 files, ~1.5s — no network, no credentials
+npm test              # 240 tests, 13 files, ~2s — no network, no credentials
 npm run lint          # must be 0 errors
 npm run build
 ```
@@ -103,10 +104,11 @@ locally, and RLS is database behaviour:
 
 | command                  | covers                                                                                                                                                                                                                                                                                                |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `npm test`               | 159 cases: parsing, dates, grouping, the `.ics` export, Insights aggregation, tool allowlists, hallucinated-citation detection, and browser↔Edge parity for the duplicated modules                                                                                                                    |
-| `npm run test:contract`  | all **12 Edge Functions boot** and reach their handler — proven by each refusing correctly (wrong cron secret, invalid bearer, missing HMAC). Catches the `BOOT_ERROR` class, which is invisible to unit tests and has bitten twice                                                                   |
+| `npm test`               | 240 cases: parsing, dates, grouping, the `.ics` export, Insights aggregation, tool allowlists, hallucinated-citation detection, and browser↔Edge parity for the duplicated modules                                                                                                                    |
+| `npm run test:contract`  | all **13 Edge Functions boot** and reach their handler — proven by each refusing correctly (wrong cron secret, invalid bearer, missing HMAC). Catches the `BOOT_ERROR` class, which is invisible to unit tests and has bitten twice                                                                   |
 | `npm run test:isolation` | cross-account security: every one of account A's ids must read as _not found_ to account B's token, and A's rows must be unchanged after. Needs `DAILY_EDGE_TOKEN_A` and `DAILY_EDGE_TOKEN_B` from Settings → Integrations; **exits 2 when unrun**, so a skipped security check cannot read as a pass |
-| `scripts/db-checks.sql`  | 13 assertions run through the Supabase MCP: RLS on every table, column grants, no `anon`-executable definer function, cross-account scoping, HNSW operator classes, the measured 0.90 follow-up threshold, and the cron schedule. **A pass is silence.**                                              |
+| `npm run verify`         | all of the above that can run here, plus the local checks, as one PASS/FAIL table per claim — see [Verifying the claims](#verifying-the-claims). Never reports a skipped check as a pass                                                                                                              |
+| `scripts/db-checks.sql`  | 13 assertions, run by `npm run verify` or through the Supabase MCP: RLS on every table, column grants, no `anon`-executable definer function, cross-account scoping, HNSW operator classes, the measured 0.90 follow-up threshold, and the cron schedule. **A pass is silence.**                      |
 
 The two network suites hit the live project. `db-checks.sql` assertion 7b writes inside a
 savepoint and rolls back — then re-counts to prove it did — so avoid running it while a digest
@@ -116,31 +118,56 @@ Full strategy, including what is deliberately **not** covered: [docs/testing.md]
 
 ## Verifying the claims
 
-Nothing here needs to be taken on faith. With the Supabase MCP connected:
-
-```sql
--- the agent audit trail, by front door
-select surface, count(*), count(*) filter (where not ok) as failures
-from mcp_tool_calls group by surface;
-
--- ownership: ask for user B with user A's embedding, get none of A's rows
-with seed as (select user_id, embedding from news_items where embedding is not null limit 1),
-     other as (select distinct user_id from news_items
-               where user_id <> (select user_id from seed) limit 1)
-select count(*) as leaked from seed, other,
-  match_news_items(other.user_id, seed.embedding, 50, null, 0) m
-where m.id in (select id from news_items where user_id = (select user_id from seed));
-
--- story threads found by similarity alone
-select count(*) from news_items where related_item_id is not null;
-```
-
-And the guardrail that stops an agent dropping a production table:
+Nothing here needs to be taken on faith, and nothing needs to be pasted into a console:
 
 ```bash
-echo '{"tool_name":"mcp__supabase__execute_sql","tool_input":{"query":"drop table tasks"}}' \
-  | .claude/hooks/block-destructive-sql.sh; echo "exit=$?"   # exit=2
+npm run verify              # 13s here. Add -- --local to skip everything needing the network.
 ```
+
+One row per claim, with the real number beside it. On this machine, just now:
+
+```
+── local — no network, no credentials
+PASS  the unit suite passes with no setup                  240 tests, 13 files, 1.90s
+PASS  eslint reports no errors                             0 errors, 12 warnings (shadcn's, in components/ui)
+PASS  the destructive-SQL hook holds in both directions    13/13 — 7 blocked, 6 let through
+PASS  every subagent declares a model, none is opus        6 agents — 3 haiku, 3 sonnet
+PASS  every Edge Function pins verify_jwt in config.toml   13/13 functions listed
+PASS  every relative link in the docs resolves             89 links checked
+PASS  the README's headline counts are true                all 6 match
+
+── deployed — needs network, no credentials (the anon key is public by design)
+PASS  every Edge Function boots and reaches its handler    13/13 functions booted
+
+── live database — needs SUPABASE_ACCESS_TOKEN (.env.local, same one deploys use)
+PASS  the 13 database assertions hold                      scripts/db-checks.sql returned no rows — a pass is silence
+PASS  no cross-account leak through match_news_items       0 of account A's rows returned when asking as account B
+PASS  every agent tool call is recorded with its surface   92 calls across 3 surfaces (mcp/planner/voice), 1 failed
+PASS  stories thread themselves by similarity alone        15 items point at an earlier one, across 12 digests
+
+── cross-account — needs two accounts' de_ tokens
+SKIP  one account's MCP token cannot touch another's rows  no DAILY_EDGE_TOKEN_A/_B — mint them in Settings → Integrations
+
+12 passed, 1 skipped
+```
+
+Three things about that output are the point:
+
+**A skipped check is never a pass.** Each group says which credential it needs and how to get
+it, the skip count is printed separately from the pass count, and the exit code counts
+failures only. With no `SUPABASE_ACCESS_TOKEN` the five live rows go to `SKIP` with the reason
+on the line; they never silently go green.
+
+**The README's own numbers are one of the checks.** The counts line under
+[Stack](#stack) is parsed and compared against the repo, so this file going stale is a
+test failure rather than something a reader has to catch.
+
+**The database assertions really run.** `scripts/db-checks.sql` is posted to
+`POST /v1/projects/{ref}/database/query` — the endpoint the hosted Supabase MCP server calls
+underneath `execute_sql` — so the 13 assertions that were previously only reachable from an
+agent session now run from a shell. `scripts/verify/live-sql.mjs` re-checks the
+destructive-SQL deny list before sending anything, because a script posting SQL over HTTPS is
+a second door into the same production database with the PreToolUse hook nowhere near it.
 
 `git log --oneline pre-hackathon..HEAD` is the recent work; the commit **bodies** carry the
 reasoning, including why a similarity threshold is 0.90 and not the 0.85 originally specified.

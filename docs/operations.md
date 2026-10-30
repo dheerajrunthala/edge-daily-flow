@@ -4,6 +4,19 @@ The cron schedule, what every Edge Function is for, and how to run any of it by 
 
 To run a scheduled job manually, call the same SQL cron calls — it is the exact production path. See the `deploy-and-verify-fn` skill for the deploy loop.
 
+### There is no CI
+
+Nothing in this repo runs on a push. The frontend deploys because Lovable syncs the default
+branch and builds it; Edge Functions deploy when somebody runs the Supabase CLI. Adding a
+pipeline would duplicate the first and could not do the second without handing a runner a
+production access token.
+
+What replaces it is `npm run verify` (`scripts/verify-claims.sh`), run by hand before a
+commit or a submission: the unit suite, the lint gate, the 13 database assertions in
+`scripts/db-checks.sql`, the 13 boot probes in `scripts/contract/boot-smoke.ts`, and the
+local consistency checks, printed as one PASS/FAIL table. It never reports a check it could
+not run as a pass.
+
 ### Cron (UTC)
 
 | when            | job                         | what                                                                 |
