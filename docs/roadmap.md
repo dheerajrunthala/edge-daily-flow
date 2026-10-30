@@ -29,7 +29,9 @@ Every phase entry names its own unverified paths on purpose, so "deployed" is ne
       `due` and `nag:k` rungs (the test task was completed four minutes before it came
       due), `1h`, quiet-hours suppression, snooze and Tomorrow, and the free-text →
       `parse-task` path from a chat.
-- [ ] Phase 6: Insights page with real data, PWA polish. **Follow-up linking is done** —
+- [ ] Phase 6: Insights page with real data, PWA polish. **The Insights page is done** — it
+      landed in Phase 9, where its verification is recorded.
+      **Follow-up linking is done** —
       see Vector retrieval (Phase 8); the threshold it specified turned out to be the median.
       **Browser notifications are done** (2026-10-12): in-app realtime toast + chime +
       tab/favicon badge, `push_subscriptions`, `public/sw.js`, `push-subscribe`,
@@ -86,6 +88,24 @@ Every phase entry names its own unverified paths on purpose, so "deployed" is ne
       `embed_content` at **100 requests/minute** and `batchEmbedContents` counts each text,
       so no retry policy could have fixed it. Also found: `plan-day` had no cron row at all,
       and three `pending` digests were unreachable by any future run.
+      **Insights is done (2026-10-30).** `MIN_PER_ARTICLE = 3` is deleted — the page had been
+      multiplying articles scanned by an invented three minutes and calling it "reading time
+      saved". What replaced it reads the tables Phase 8 filled and nothing else: four tiles
+      (articles scanned, stories opened of delivered, follow-ups linked, on-time completion), a
+      stacked `mcp_tool_calls`-by-`surface` chart, tasks by creation path, and model spend by
+      `ai_events.kind`. Aggregation is pure in `src/lib/insights.ts` with 21 unit tests.
+      **Verified:** every figure the page computes was asserted against the same aggregate run
+      in SQL through the MCP for the owner's account over 2026-10-01…30 — scanned 1,689, opened
+      7 of 320 (2%), 10 follow-ups, on-time 4/49 (8%), 84 tool calls (81 mcp / 3 planner, 1
+      failed), tasks 6 manual / 3 ai / 37 mcp / 1 telegram, 224,433 tokens (digest 209,096 ·
+      plan 10,169 · task_parse 5,168), 50 completions. The hooks' row sets were read back
+      through the real `authenticated` role with the owner's JWT claims, which also confirmed
+      the 88 `ai_events` rows with a null `user_id` are invisible to a browser. **Not yet
+      exercised:** the rendered page in a browser — Chrome returned "frame is showing error
+      page" for every localhost URL this session, so the layout, the dark-mode pass and the
+      empty state for a new account have not been _looked_ at (**owner-assigned**).
+      **Deliberately skipped:** topic coverage — no row records whether an item arrived via a
+      topic; see Rejected in `docs/decisions.md`.
       **Will remain unverified:** the `agent` happy path from a browser session (a user JWT
       cannot be minted outside one — **owner-assigned**), dictation on a real microphone, the
       `voice` and `telegram` registry surfaces, and the web-push action buttons.
