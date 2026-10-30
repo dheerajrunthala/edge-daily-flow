@@ -291,6 +291,91 @@ export const useCompletions = () =>
     },
   });
 
+// ----------------------------------------------------------------- insights
+
+/**
+ * Every tool call an agent made for this account since `since`.
+ *
+ * `surface` is the point of the table: it is the only record of which of the five front
+ * doors an agent came through, and the index `(user_id, surface, created_at desc)` was
+ * added for this query. Columns are named, not `*` — there is nothing else on the row a
+ * chart needs, and `token_id` identifies a credential.
+ *
+ * The cap is a backstop, not a window: the window is `since`, and 5000 calls in thirty
+ * days would be 7 an hour, every hour. Ordered descending so if it ever does bite, what
+ * survives is the recent end rather than an arbitrary slice.
+ */
+export const useToolCalls = (since: string) =>
+  useQuery({
+    queryKey: qk.toolCalls(since),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("mcp_tool_calls")
+        .select("id,surface,tool,ok,created_at")
+        .gte("created_at", since)
+        .order("created_at", { ascending: false })
+        .limit(5000);
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+
+/**
+ * This account's model calls since `since`, with their token counts.
+ *
+ * `ai_events.user_id` is nullable — ingest-news summarises the shared article pool and no
+ * user owns that work — and those rows are invisible here: the select policy is
+ * `user_id = auth.uid()` and NULL is never equal to anything. So this is spend *for this
+ * account*, which is the only spend an account can honestly be shown.
+ */
+export const useAiEvents = (since: string) =>
+  useQuery({
+    queryKey: qk.aiEvents(since),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("ai_events")
+        .select("id,kind,input_tokens,output_tokens,items_processed,created_at")
+        .gte("created_at", since)
+        .order("created_at", { ascending: false })
+        .limit(5000);
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+
+/**
+ * Three counts over the window's news_items: delivered, opened, and linked follow-ups.
+ *
+ * Counted by the database with `head: true` rather than by fetching rows and calling
+ * `.length`. A count has to be exact — the Insights page's whole claim is that each
+ * figure matches the same query run against the database — and a fetch is capped by
+ * PostgREST's `max-rows`, so a heavy month would have started under-reporting with no
+ * error anywhere. `read_at` is only written when a story's link is actually opened, so
+ * `opened` is a click and not a card that scrolled past.
+ */
+export const useNewsCounts = (since: string) =>
+  useQuery({
+    queryKey: qk.newsCounts(since),
+    queryFn: async () => {
+      const base = () =>
+        supabase
+          .from("news_items")
+          .select("id", { count: "exact", head: true })
+          .gte("created_at", since);
+      const [delivered, opened, followups] = await Promise.all([
+        base(),
+        base().not("read_at", "is", null),
+        base().not("related_item_id", "is", null),
+      ]);
+      for (const r of [delivered, opened, followups]) if (r.error) throw r.error;
+      return {
+        delivered: delivered.count ?? 0,
+        opened: opened.count ?? 0,
+        followups: followups.count ?? 0,
+      };
+    },
+  });
+
 // ---------- Mutations ----------
 
 export function useUpdateProfile() {
