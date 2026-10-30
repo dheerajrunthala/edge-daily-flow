@@ -66,3 +66,10 @@ verify_jwt = true
 # pipeline: pg_cron -> net.http_post sends no user JWT.
 [functions.plan-day]
 verify_jwt = false
+
+# alexa-skill is called by Amazon's servers, which send no Supabase JWT. It authenticates
+# with the account-linking access token — an ordinary de_ token from api_tokens, resolved by
+# the same requireApiToken() the MCP server uses — so the platform gate would reject the only
+# caller that is supposed to reach it.
+[functions.alexa-skill]
+verify_jwt = false

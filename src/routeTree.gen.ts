@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedAskRouteImport } from './routes/_authenticated/ask'
+import { Route as AuthenticatedAuthorizeRouteImport } from './routes/_authenticated/authorize'
 import { Route as AuthenticatedBriefRouteImport } from './routes/_authenticated/brief'
 import { Route as AuthenticatedInsightsRouteImport } from './routes/_authenticated/insights'
 import { Route as AuthenticatedNewsRouteImport } from './routes/_authenticated/news'
@@ -37,6 +38,11 @@ const LoginRoute = LoginRouteImport.update({
 const AuthenticatedAskRoute = AuthenticatedAskRouteImport.update({
   id: '/ask',
   path: '/ask',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedAuthorizeRoute = AuthenticatedAuthorizeRouteImport.update({
+  id: '/authorize',
+  path: '/authorize',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedBriefRoute = AuthenticatedBriefRouteImport.update({
@@ -74,6 +80,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/ask': typeof AuthenticatedAskRoute
+  '/authorize': typeof AuthenticatedAuthorizeRoute
   '/brief': typeof AuthenticatedBriefRoute
   '/insights': typeof AuthenticatedInsightsRoute
   '/news': typeof AuthenticatedNewsRoute
@@ -85,6 +92,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/ask': typeof AuthenticatedAskRoute
+  '/authorize': typeof AuthenticatedAuthorizeRoute
   '/brief': typeof AuthenticatedBriefRoute
   '/insights': typeof AuthenticatedInsightsRoute
   '/news': typeof AuthenticatedNewsRoute
@@ -98,6 +106,7 @@ export interface FileRoutesById {
   '/_authenticated': typeof AuthenticatedRouteRouteWithChildren
   '/login': typeof LoginRoute
   '/_authenticated/ask': typeof AuthenticatedAskRoute
+  '/_authenticated/authorize': typeof AuthenticatedAuthorizeRoute
   '/_authenticated/brief': typeof AuthenticatedBriefRoute
   '/_authenticated/insights': typeof AuthenticatedInsightsRoute
   '/_authenticated/news': typeof AuthenticatedNewsRoute
@@ -111,6 +120,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/ask'
+    | '/authorize'
     | '/brief'
     | '/insights'
     | '/news'
@@ -122,6 +132,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/ask'
+    | '/authorize'
     | '/brief'
     | '/insights'
     | '/news'
@@ -134,6 +145,7 @@ export interface FileRouteTypes {
     | '/_authenticated'
     | '/login'
     | '/_authenticated/ask'
+    | '/_authenticated/authorize'
     | '/_authenticated/brief'
     | '/_authenticated/insights'
     | '/_authenticated/news'
@@ -176,6 +188,13 @@ declare module '@tanstack/react-router' {
       path: '/ask'
       fullPath: '/ask'
       preLoaderRoute: typeof AuthenticatedAskRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/authorize': {
+      id: '/_authenticated/authorize'
+      path: '/authorize'
+      fullPath: '/authorize'
+      preLoaderRoute: typeof AuthenticatedAuthorizeRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/brief': {
@@ -225,6 +244,7 @@ declare module '@tanstack/react-router' {
 
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedAskRoute: typeof AuthenticatedAskRoute
+  AuthenticatedAuthorizeRoute: typeof AuthenticatedAuthorizeRoute
   AuthenticatedBriefRoute: typeof AuthenticatedBriefRoute
   AuthenticatedInsightsRoute: typeof AuthenticatedInsightsRoute
   AuthenticatedNewsRoute: typeof AuthenticatedNewsRoute
@@ -235,6 +255,7 @@ interface AuthenticatedRouteRouteChildren {
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedAskRoute: AuthenticatedAskRoute,
+  AuthenticatedAuthorizeRoute: AuthenticatedAuthorizeRoute,
   AuthenticatedBriefRoute: AuthenticatedBriefRoute,
   AuthenticatedInsightsRoute: AuthenticatedInsightsRoute,
   AuthenticatedNewsRoute: AuthenticatedNewsRoute,

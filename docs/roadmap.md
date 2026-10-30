@@ -109,7 +109,27 @@ Every phase entry names its own unverified paths on purpose, so "deployed" is ne
       **Will remain unverified:** the `agent` happy path from a browser session (a user JWT
       cannot be minted outside one — **owner-assigned**), dictation on a real microphone, the
       `voice` and `telegram` registry surfaces, and the web-push action buttons.
-- [ ] Phase 10 (optional): OAuth2 authorization-code endpoint — which unlocks both Alexa
-      account linking and ChatGPT as an MCP client — Google Calendar two-way sync so the
-      planner can see when you are free, WhatsApp, the weekly review email, Telegram free text
-      through the agent, and Playwright E2E.
+- [x] Phase 10: **the voice door.** `alexa-skill` on the existing `voice` surface, plus
+      `/authorize` for OAuth2 **implicit-grant** account linking. Implicit rather than
+      authorization-code because the credential it returns is already long-lived and
+      revocable — an ordinary `de_` row in `api_tokens` — so there is no token endpoint, no
+      refresh flow and no second credential system. Revoking the "Alexa" token in Settings →
+      Integrations stops the skill immediately.
+      One free-text `AskIntent` funnels into the agent rather than ten brittle slot intents,
+      because the agent is better at working out what was meant than a slot grammar is.
+      **Verified in production:** no access token returns a LinkAccount card rather than an
+      error; a stale timestamp is refused; an unknown `de_` token prompts re-linking rather
+      than 500-ing. The `redirect_uri` allowlist is checked on host _and_ path — an authorize
+      endpoint that reflects an arbitrary redirect is an open redirector handing out live API
+      tokens.
+      **Known gap, deliberate:** Amazon's certificate-chain signature verification is **not**
+      implemented. Only `applicationId` and request freshness are checked. What actually gates
+      access is the account-linking token, which an attacker does not have; the signature
+      proves the request came from Amazon, which matters less given that. Worth closing before
+      certification.
+      **Not yet exercised:** the skill from a real Echo device, and the linking flow end to end
+      through the Alexa app — both need the Amazon developer console, which is owner-assigned.
+- [ ] Phase 11 (optional): Google Calendar two-way sync so the planner can see when you are
+      free, WhatsApp, the weekly review email, Telegram free text through the agent, and
+      Playwright E2E. ChatGPT as an MCP client is now closer too: `/authorize` exists, and
+      wiring it to the `mcp` function is a small step from here.
