@@ -120,6 +120,90 @@ malformation, not the malformation. The SEBI date `"09 Oct, 2026 +0530"`, Google
 `CBMi…` ids, Hugging Face's boilerplate `og:description` — none of these are things anyone
 would invent.
 
+## Tiers 3 and 4: the committed scripts
+
+These were a _practice_ before — every one of them had been run, by hand, through the
+Supabase MCP, in a session transcript nobody else could re-run. A reviewer cannot re-run a
+transcript and a regression cannot be caught by one.
+
+| script                              | tier | run it with                       |
+| ----------------------------------- | ---- | --------------------------------- |
+| `scripts/db-checks.sql`             | 3    | the Supabase MCP `execute_sql`    |
+| `scripts/contract/boot-smoke.ts`    | 4    | `npm run test:contract`           |
+| `scripts/contract/mcp-isolation.ts` | 4    | `npm run test:isolation` + tokens |
+
+`npm test` stays the fast unit suite. Contract tests hit the network and are not in the
+inner loop.
+
+### `db-checks.sql` — 12 assertion blocks, and a pass is silence
+
+RLS on every table · exactly two policy-less tables · no `anon`/`PUBLIC` EXECUTE on the
+definer RPCs (plus a sweep that catches a _newly added_ one) · the three column-grant
+narrowings exactly · `api_tokens.token_hash` unreachable · `anon` holding nothing on the
+four locked tables · **`match_news_items` not crossing accounts** · HNSW indexes with
+`vector_cosine_ops` · `link_followups` writing nothing below 0.90 · the cron schedule
+matching [operations.md](operations.md) · no quota-spending job sharing a minute with
+`repair-embeddings`.
+
+Two things in it are worth knowing before editing it:
+
+**Expectations are sets compared with `=`, never `not exists` over a known-bad list.** A
+set comparison goes red in _both_ directions, so it catches a grant that was added and a
+grant that was lost. `not exists` only ever catches the first.
+
+**Assertion 7b calls a function that writes.** `link_followups` cannot be tested
+read-only, so the writes happen inside a PL/pgSQL block with an `EXCEPTION` clause —
+Postgres implements that as a savepoint, and raising inside it rolls the writes back while
+leaving the variables intact. The block then re-counts the production rows and fails loudly
+if the rollback did not happen. Every red test in this file used the same pattern to create
+genuinely broken state (a table without RLS, an unscoped copy of `match_news_items`, an
+index with the wrong operator class) and roll it back.
+
+### `boot-smoke.ts` — and why a 401 is not proof of boot
+
+A missing export is a **boot failure**, not a type error: the isolate refuses to start,
+pg_net records `BOOT_ERROR`, and the function logs are empty — indistinguishable from a
+function nobody called. `npm run build` cannot see it, because the Deno bundle is assembled
+on deploy from specifiers Vite never resolves.
+
+The plan for this script said to probe the user-JWT functions with no credential and treat
+a 401 as a pass. Measured, that is wrong:
+
+```
+POST /parse-task  (no Authorization)
+  → 401 {"code":"UNAUTHORIZED_NO_AUTH_HEADER","message":"Missing authorization header"}
+```
+
+That is the **platform gateway**. With `verify_jwt = true` the isolate is never started, so
+the response is identical whether the bundle is healthy or broken — the test cannot fail.
+Sending the publishable anon key gets past the gate and reaches the handler, which answers
+in its own words (`{"error":"Invalid or expired token"}`, i.e. `requireUser()`).
+
+So every probe asserts on a **handler-authored body**, not a status code, and treats a
+gateway refusal as a failure with that explanation. The cron functions are probed with a
+deliberately wrong `x-cron-secret` for the same reason and one more: invoking them for real
+through `invoke_edge_function` would _run the jobs_, spending Gemini quota on every smoke
+run. A wrong secret boots the identical bundle and stops at the handler's first line.
+
+### `mcp-isolation.ts` — negative evidence is the point
+
+Every MCP tool runs with the service role, and the service role bypasses RLS entirely. The
+only thing between two accounts is `.eq("user_id", ctx.userId)` inside `mine()`/`myRow()`.
+
+Asserting that token B got an error is **half** a test — an implementation that refuses the
+read and performs the write anyway passes it. So A's rows are snapshotted through token A,
+attacked through token B across all six mutating tools including `delete_task`, then
+re-read through token A and compared byte for byte. The comparison is the assertion.
+
+It also refuses to pass vacuously: if the two tokens resolve to the same account, or if
+account A has no task to attack, that is a failure rather than a silent skip.
+
+One finding from writing it: the 120/hour rate limit surfaces as a **JSON-RPC tool error on
+an HTTP 200**, not an HTTP 429. `checkRateLimit()` is called inside the registered-tool
+wrapper, after auth, so the SDK turns its `HttpError` into `isError` content; the
+429 → `-32000` mapping in `mcp/index.ts` only covers failures raised in `handle()`, which
+is authentication. The assertion checks the behaviour, not the guess.
+
 ## Verified in production rather than in a test
 
 Each of these has evidence in the database or the git log:
@@ -142,7 +226,10 @@ Each of these has evidence in the database or the git log:
 - dictation on a real microphone
 - the `voice` and `telegram` registry surfaces
 - the web-push action buttons end to end, and 404/410 expiry pruning
-- tiers 3 and 4 exist as a strategy and as manual runs, not yet as committed scripts — see
-  [plans/P1-codify-tests.md](plans/P1-codify-tests.md)
+- the `--rate-limit` block of `mcp-isolation.ts`, which is opt-in: running it spends an
+  account's whole hourly budget, so it is not part of a normal run
+- `mcp-isolation.ts` itself has not been run against production — it needs a second
+  account's `de_…` token, which is **owner-assigned**. It is committed runnable and exits
+  **2** (not run) rather than 0 when the tokens are absent, so it cannot read as a pass
 
 An honest gap is worth more than an inflated count.
