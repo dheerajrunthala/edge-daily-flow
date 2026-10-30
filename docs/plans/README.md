@@ -45,5 +45,15 @@ Ordered by value. Each is independent unless a dependency is named.
 
 ## Status
 
-None started. The first three are the ones that most improve the product and the repo; P4 is
-the one that makes the multi-door story complete.
+| plan               | status                                                                             |
+| ------------------ | ---------------------------------------------------------------------------------- |
+| P1 codify tests    | **done** — `scripts/db-checks.sql`, `boot-smoke`, `mcp-isolation`                  |
+| P2 Insights        | **done** — every number traces to a row                                            |
+| P3 calendar export | **done** — `.ics` export, plus a follow-up polishing commit                        |
+| P4 OAuth + Alexa   | **mostly done** — skill and implicit-grant linking shipped; ChatGPT connector left |
+| P5 calendar sync   | not started                                                                        |
+| P6 WhatsApp        | not started                                                                        |
+| P7 weekly review   | not started                                                                        |
+
+A done plan keeps its file rather than being deleted: the plan and the commit that fulfilled
+it, read together, are the evidence that the work was designed before it was written.
