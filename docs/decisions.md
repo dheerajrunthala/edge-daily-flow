@@ -109,9 +109,13 @@ pins with `supabase secrets set` after checking ListModels; a bad value is one s
 reverting.
 
 **A repair job must not cause the damage it repairs.** The embedding repair runs at
-`:07/:17/:27/…` and shares a minute with no other job. `*/10` would have fired at 01:00 UTC
-alongside six parallel ingest invocations all embedding, and the articles that lost the quota
-race would have been _fresh_ ones — pooled vectorless and therefore permanent.
+`:07/:17/:27/…` and shares a minute with no other job **that spends Gemini quota**. `*/10`
+would have fired at 01:00 UTC alongside six parallel ingest invocations all embedding, and the
+articles that lost the quota race would have been _fresh_ ones — pooled vectorless and
+therefore permanent. `check-reminders` is the one job it does share a minute with, because
+that one runs every minute and so shares a minute with everything; it makes no Gemini call.
+Asserted in `scripts/db-checks.sql`, which names that exemption rather than implying there
+is none.
 
 ---
 

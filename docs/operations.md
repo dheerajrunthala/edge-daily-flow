@@ -100,10 +100,17 @@ The repair's 90 requests would then compete with ingest's own for the same 100-p
 tier quota, and the articles that lost would be _fresh_ ones — pooled vectorless and therefore
 permanent. A repair job that causes the damage it repairs.
 
-The odd offsets go further than avoiding :00: they share a minute with **no** other job here.
-Minutes :15 and :45 would in fact have been safe, because `send-briefs` makes no Gemini call and
-the planner's read-only allowlist never embeds — but a schedule that is safe only _because of a
-correct argument about what other jobs do_ stops being safe when one of them changes.
+The odd offsets go further than avoiding :00: they share a minute with no other job here that
+spends Gemini quota. Minutes :15 and :45 would in fact have been safe, because `send-briefs`
+makes no Gemini call and the planner's read-only allowlist never embeds — but a schedule that
+is safe only _because of a correct argument about what other jobs do_ stops being safe when one
+of them changes.
+
+The exception is `check-reminders`, which runs **every** minute and therefore shares a minute
+with everything by construction. It is the one place that argument still has to be made, and it
+holds: a tick is one indexed query and no model call. `scripts/db-checks.sql` asserts the
+no-clash rule with `check-reminders` named as the exemption, so the claim is checked rather
+than assumed.
 
 Caught by the `schema-guardian` agent before the migration was applied; it could only know by
 querying the live `cron.job` table and reading the function's own constants.
