@@ -53,8 +53,26 @@ export const Route = createFileRoute("/_authenticated/authorize")({
 const AMAZON_HOST =
   /(^|\.)amazon\.(com|co\.uk|co\.jp|in|de|fr|it|es|nl|se|pl|com\.au|com\.br|com\.mx|com\.tr|sa|ae|eg|ca|cn|sg)$/i;
 
-/** Amazon's account-linking callback path, across every region. */
-const LINK_PATH = "/api/skill/link/";
+/**
+ * Amazon's account-linking callback paths.
+ *
+ * Two of them, and the first one is the one that matters. The developer console actually
+ * issues:
+ *
+ *   https://layla.amazon.com/spa/skill/account-linking-status.html?vendorId=…
+ *
+ * while `/api/skill/link/{vendorId}` is the older form that nearly every tutorial and SDK
+ * doc still shows. Checking only the documented path refused a real link attempt whose host
+ * was on the allowlist all along — the host was never the problem, the path was.
+ *
+ * Both are kept: Amazon has not retired the legacy form, and a skill created years ago may
+ * still be configured with it.
+ */
+const LINK_PATHS = ["/spa/skill/account-linking-status.html", "/api/skill/link/"] as const;
+
+function allowedPath(pathname: string): boolean {
+  return LINK_PATHS.some((p) => pathname === p || pathname.startsWith(p));
+}
 
 function redirectAllowed(raw: string): URL | null {
   let url: URL;
@@ -65,7 +83,7 @@ function redirectAllowed(raw: string): URL | null {
   }
   if (url.protocol !== "https:") return null;
   if (!AMAZON_HOST.test(url.hostname)) return null;
-  if (!url.pathname.startsWith(LINK_PATH)) return null;
+  if (!allowedPath(url.pathname)) return null;
   return url;
 }
 
@@ -79,8 +97,8 @@ function refusalReason(raw: string): string {
   }
   if (url.protocol !== "https:") return `“${url.protocol}” is not https.`;
   if (!AMAZON_HOST.test(url.hostname)) return `“${url.hostname}” is not an Amazon domain.`;
-  if (!url.pathname.startsWith(LINK_PATH)) {
-    return `the path “${url.pathname}” is not Amazon's account-linking path (${LINK_PATH}…).`;
+  if (!allowedPath(url.pathname)) {
+    return `the path “${url.pathname}” is not one of Amazon's account-linking paths (${LINK_PATHS.join(" or ")}).`;
   }
   return "it did not match the expected shape.";
 }
