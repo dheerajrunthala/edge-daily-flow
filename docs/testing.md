@@ -96,7 +96,7 @@ after an isolation test, confirm the other account's rows are untouched.
 
 ## What exists today
 
-**122 automated tests across 9 files**, `npm test` in ~1.5s.
+**159 automated tests across 11 files**, `npm test` in ~1.5s.
 
 | file                             | focus                                                       | cases |
 | -------------------------------- | ----------------------------------------------------------- | ----- |
@@ -135,7 +135,7 @@ transcript and a regression cannot be caught by one.
 `npm test` stays the fast unit suite. Contract tests hit the network and are not in the
 inner loop.
 
-### `db-checks.sql` — 12 assertion blocks, and a pass is silence
+### `db-checks.sql` — 13 assertion blocks, and a pass is silence
 
 RLS on every table · exactly two policy-less tables · no `anon`/`PUBLIC` EXECUTE on the
 definer RPCs (plus a sweep that catches a _newly added_ one) · the three column-grant

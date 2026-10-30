@@ -60,7 +60,7 @@ Supabase (Postgres 17, pgvector/HNSW, pg_cron, pg_net, Vault, Auth, Edge Functio
 Google Gemini (parsing, ranking, agent tool-calling, embeddings) · Model Context Protocol ·
 Gmail SMTP · Telegram Bot API · Web Push
 
-**12 Edge Functions · 19 migrations · 122 tests · 6 skills · 6 subagents · 2 hooks**
+**12 Edge Functions · 20 migrations · 159 tests · 6 skills · 6 subagents · 2 hooks**
 
 ---
 
@@ -69,7 +69,7 @@ Gmail SMTP · Telegram Bot API · Web Push
 ```bash
 npm install
 npm run dev          # http://localhost:3000
-npm test             # 122 tests, ~1.5s
+npm test             # 159 tests across 11 files, ~1.5s
 npm run lint         # 0 errors (12 pre-existing shadcn warnings)
 npm run build
 ```
@@ -88,6 +88,31 @@ npx supabase functions deploy <name> --project-ref <ref>
 See [docs/operations.md](docs/operations.md).
 
 ---
+
+## Tests
+
+```bash
+npm test              # 159 tests, 11 files, ~1.5s — no network, no credentials
+npm run lint          # must be 0 errors
+npm run build
+```
+
+`npm test` is the gate and needs no setup. Three further suites exist because the most
+dangerous code here cannot be reached by a unit test — the Deno Edge runtime does not run
+locally, and RLS is database behaviour:
+
+| command                  | covers                                                                                                                                                                                                                                                                                                |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm test`               | 159 cases: parsing, dates, grouping, the `.ics` export, Insights aggregation, tool allowlists, hallucinated-citation detection, and browser↔Edge parity for the duplicated modules                                                                                                                    |
+| `npm run test:contract`  | all **12 Edge Functions boot** and reach their handler — proven by each refusing correctly (wrong cron secret, invalid bearer, missing HMAC). Catches the `BOOT_ERROR` class, which is invisible to unit tests and has bitten twice                                                                   |
+| `npm run test:isolation` | cross-account security: every one of account A's ids must read as _not found_ to account B's token, and A's rows must be unchanged after. Needs `DAILY_EDGE_TOKEN_A` and `DAILY_EDGE_TOKEN_B` from Settings → Integrations; **exits 2 when unrun**, so a skipped security check cannot read as a pass |
+| `scripts/db-checks.sql`  | 13 assertions run through the Supabase MCP: RLS on every table, column grants, no `anon`-executable definer function, cross-account scoping, HNSW operator classes, the measured 0.90 follow-up threshold, and the cron schedule. **A pass is silence.**                                              |
+
+The two network suites hit the live project. `db-checks.sql` assertion 7b writes inside a
+savepoint and rolls back — then re-counts to prove it did — so avoid running it while a digest
+build is in flight.
+
+Full strategy, including what is deliberately **not** covered: [docs/testing.md](docs/testing.md).
 
 ## Verifying the claims
 
