@@ -175,6 +175,15 @@ async function postGenerate(
   payload: string,
   signal?: AbortSignal,
   fallbackModel?: string,
+  /**
+   * Per-call deadline override.
+   *
+   * 25s is right for a cron job that has 150s and nobody waiting. It is fatal for a voice
+   * surface: Alexa abandons a skill after about 8 seconds, so one 25s timeout means the
+   * user has already heard "there was a problem" before the retry even begins. Callers with
+   * a human waiting pass their own budget.
+   */
+  callTimeoutMs = CALL_TIMEOUT_MS,
 ): Promise<GeminiEnvelope> {
   const plan: { model: string; attempts: number }[] = [{ model, attempts: MAX_ATTEMPTS }];
   if (fallbackModel && fallbackModel !== model) {
@@ -201,7 +210,7 @@ async function postGenerate(
         res = await fetch(`${API_ROOT}/models/${step.model}:generateContent`, {
           method: "POST",
           headers: { "content-type": "application/json", "x-goog-api-key": apiKey() },
-          signal: withDeadline(signal, CALL_TIMEOUT_MS),
+          signal: withDeadline(signal, callTimeoutMs),
           body: payload,
         });
         body = await res.text();
@@ -209,7 +218,7 @@ async function postGenerate(
         // A timeout here is worth naming, because the alternative is the platform killing
         // the whole invocation and the logs showing nothing at all.
         const reason = err instanceof Error ? err.name : String(err);
-        console.warn(`gemini ${step.model} aborted after ${CALL_TIMEOUT_MS}ms (${reason})`);
+        console.warn(`gemini ${step.model} aborted after ${callTimeoutMs}ms (${reason})`);
         lastStatus = 504;
         lastBody = `request aborted: ${reason}`;
         // Abandon this model rather than retrying it. A request that hangs to the
@@ -504,6 +513,12 @@ export async function generateWithTools(opts: {
   signal?: AbortSignal;
   /** Model to try when the primary is out of capacity. Pass null to disable. */
   fallbackModel?: string | null;
+  /**
+   * Per-call deadline. Default 25s suits an unattended cron job; a surface with someone
+   * waiting should pass its own, because the right answer after the caller has given up is
+   * worth nothing.
+   */
+  callTimeoutMs?: number;
 }): Promise<{ text: string; usage: Usage; calls: ToolCallRecord[]; turns: number }> {
   const model = opts.model ?? GEMINI_PARSE_MODEL;
   const maxTurns = Math.max(1, Math.min(opts.maxTurns ?? MAX_TOOL_TURNS, MAX_TOOL_TURNS));
@@ -547,6 +562,7 @@ export async function generateWithTools(opts: {
       }),
       opts.signal,
       opts.fallbackModel === null ? undefined : (opts.fallbackModel ?? GEMINI_FALLBACK_MODEL),
+      opts.callTimeoutMs,
     );
     addUsage(readUsage(envelope));
 

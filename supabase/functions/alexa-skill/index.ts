@@ -19,11 +19,12 @@
 // requireApiToken() the MCP server uses.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 
 import { requireApiToken } from "../_shared/api-tokens.ts";
 import { loadUserCtx } from "../_shared/agent-tools.ts";
 import { type Run, declarationsFor, runTool } from "../_shared/agent-registry.ts";
-import { GEMINI_PARSE_MODEL, generateWithTools } from "../_shared/gemini.ts";
+import { GEMINI_FALLBACK_MODEL, generateWithTools } from "../_shared/gemini.ts";
 import { isEnabled } from "../_shared/features.ts";
 import { logToolCall } from "../_shared/api-tokens.ts";
 import { HttpError, countAiEvents, json, logAiEvent, serviceClient } from "../_shared/supabase.ts";
@@ -31,6 +32,30 @@ import { offsetLabel } from "../_shared/time.ts";
 
 /** Spoken turns a user may have per day. Shares the agent's budget, counted the same way. */
 const DAILY_LIMIT = 60;
+
+/**
+ * Everything here is sized to Alexa's ~8 second patience, which is the tightest budget any
+ * surface in this project has and changes which answers are even reachable.
+ *
+ * Measured on the first real device session: the agent answered correctly in **56 seconds**
+ * and Alexa had long since said "there was a problem". The whole 56s was one cause —
+ * `gemini-flash-latest` timing out at its 25s deadline on every call before falling through
+ * to flash-lite, which then answered in about three seconds.
+ *
+ * So voice does not use the primary model at all. It calls flash-lite directly, with no
+ * fallback (there is no time for a second attempt) and a 4s per-call deadline, which leaves
+ * room for two turns plus a tool round trip inside the budget. On every other surface the
+ * primary-then-fallback order is right; here it is the difference between an answer and a
+ * failure.
+ */
+const VOICE_CALL_TIMEOUT_MS = 4_000;
+
+/**
+ * Two turns: one to pick a tool, one to speak the result. Four is right where latency is
+ * free. Here a third turn cannot finish before Alexa hangs up, so allowing it only wastes
+ * the user's quota on an answer nobody hears.
+ */
+const VOICE_MAX_TURNS = 2;
 
 /**
  * How stale an Alexa request may be.
@@ -172,21 +197,41 @@ async function handle(req: Request): Promise<Response> {
     return speak("Sorry, I did not catch that.", false, "Try asking what is due today.");
   }
 
+  // ---------------------------------------------------------------- fast paths
+  //
+  // The three things people actually ask a speaker need no model at all, and on an 8 second
+  // budget that matters more than elegance. "What's due today" is a query and a sentence;
+  // routing it through two Gemini turns spends four of those eight seconds to produce the
+  // same words, and spends them again on the next question.
+  //
+  // This is a latency decision, not a capability decision. Anything that is not one of these
+  // shapes still goes to the agent, which is why the list is short and deliberately does not
+  // try to grow into an intent router. It also still goes through runTool, so the ownership
+  // guard and the mcp_tool_calls audit trail apply exactly as they do everywhere else.
+  const ctxEarly = await loadUserCtx(admin, token.userId);
+  const runEarly: Run = { ctx: ctxEarly, surface: "voice", citations: new Map() };
+  const quick = await fastAnswer(admin, token, runEarly, utterance);
+  if (quick) return speak(quick, false, "Anything else?");
+
   const used = await countAiEvents(admin, token.userId, "agent", startOfToday());
   if (used >= DAILY_LIMIT) {
     return speak("You have reached today's limit for the assistant. Try again tomorrow.", true);
   }
 
   // ---------------------------------------------------------------- the agent
-  const ctx = await loadUserCtx(admin, token.userId);
-  const run: Run = { ctx, surface: "voice", citations: new Map() };
+  const ctx = ctxEarly;
+  const run: Run = runEarly;
 
   const result = await generateWithTools({
-    model: GEMINI_PARSE_MODEL,
+    // flash-lite, deliberately, and as the primary rather than the fallback — see
+    // VOICE_CALL_TIMEOUT_MS above.
+    model: GEMINI_FALLBACK_MODEL,
+    fallbackModel: null,
+    callTimeoutMs: VOICE_CALL_TIMEOUT_MS,
     system: voicePrompt(ctx.tz, ctx.morningTime, offsetLabel(new Date(), ctx.tz)),
     messages: [{ role: "user" as const, text: utterance }],
     tools: declarationsFor("voice"),
-    maxTurns: 4,
+    maxTurns: VOICE_MAX_TURNS,
     execute: async (name, args) => {
       const started = Date.now();
       try {
@@ -227,6 +272,116 @@ async function handle(req: Request): Promise<Response> {
   // Spoken output must not contain markdown or a URL even if the model slipped. Stripping is
   // right here where silently reading "https colon slash slash" aloud is the failure.
   return speak(forSpeech(result.text), false, "Anything else?");
+}
+
+/**
+ * Answer the common asks directly, or return null and let the agent handle it.
+ *
+ * Patterns are matched on the whole utterance and kept broad rather than clever: Alexa's
+ * speech-to-text varies ("what's due", "what is do", "whats on my list"), so a near miss
+ * costing a slower agent answer is fine, while a false positive answering the wrong question
+ * is not. That is why every pattern requires a noun — "today" alone does not match.
+ */
+async function fastAnswer(
+  admin: SupabaseClient,
+  token: { userId: string; tokenId: string },
+  run: Run,
+  utterance: string,
+): Promise<string | null> {
+  const u = utterance.toLowerCase().trim();
+
+  const asksTasks =
+    /\b(task|tasks|to ?do|to-?dos?|due|list|agenda|pending|overdue)\b/.test(u) &&
+    !/\b(add|create|remind|new|remember)\b/.test(u);
+  const asksNews = /\b(news|headline|headlines|brief|briefing|digest|stor(y|ies))\b/.test(u);
+
+  if (!asksTasks && !asksNews) return null;
+
+  const call = async (tool: string, args: Record<string, unknown>) => {
+    const started = Date.now();
+    try {
+      const out = await runTool(run, tool, args);
+      await logToolCall(admin, {
+        userId: token.userId,
+        tokenId: token.tokenId,
+        tool,
+        ok: true,
+        durationMs: Date.now() - started,
+        surface: "voice",
+      });
+      return out;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await logToolCall(admin, {
+        userId: token.userId,
+        tokenId: token.tokenId,
+        tool,
+        ok: false,
+        error: msg,
+        durationMs: Date.now() - started,
+        surface: "voice",
+      });
+      throw err;
+    }
+  };
+
+  if (asksTasks) {
+    const res = (await call("list_tasks", { limit: 50 })) as {
+      tasks?: { title: string; group: string; due_label: string }[];
+    };
+    const all = res.tasks ?? [];
+    const overdue = all.filter((t) => t.group === "overdue");
+    const today = all.filter((t) => t.group === "today");
+
+    if (overdue.length === 0 && today.length === 0) {
+      const open = all.length;
+      return open === 0
+        ? "Nothing on your list at all. Enjoy it."
+        : `Nothing due today. You have ${say(open, "task")} further out.`;
+    }
+
+    const parts: string[] = [];
+    // Overdue first, because that is the thing a person needs to hear first.
+    if (overdue.length > 0) {
+      parts.push(`${say(overdue.length, "overdue task")}: ${titles(overdue)}.`);
+    }
+    if (today.length > 0) {
+      parts.push(`Due today, ${say(today.length, "task")}: ${titles(today)}.`);
+    }
+    return parts.join(" ");
+  }
+
+  const res = (await call("my_news", {})) as {
+    ready?: boolean;
+    items?: { headline: string; why_it_matters?: string | null }[];
+  };
+  if (!res.ready) {
+    return "Your brief for today is not ready yet. It is usually built early in the morning.";
+  }
+  const items = res.items ?? [];
+  if (items.length === 0) return "There is nothing in today's brief.";
+
+  // Three headlines. More than that and a listener has lost the first by the last.
+  const top = items.slice(0, 3).map((i) => i.headline.replace(/\s+/g, " ").trim());
+  const why = items[0]?.why_it_matters?.replace(/\s+/g, " ").trim();
+  return (
+    `Today's top ${say(top.length, "story")}. ${top.map((t, i) => `${i + 1}. ${t}`).join(" ")}` +
+    (why ? ` On the first: ${why}` : "")
+  );
+}
+
+/** "1 task" / "3 tasks" — because "1 tasks" is the kind of thing a speaker makes obvious. */
+function say(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
+}
+
+/** At most three titles, comma-joined with an "and", which is how a person would say it. */
+function titles(list: { title: string }[]): string {
+  const names = list.slice(0, 3).map((t) => t.title.replace(/\s+/g, " ").trim());
+  const extra = list.length - names.length;
+  const joined =
+    names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
+  return extra > 0 ? `${joined}, plus ${say(extra, "more")}` : joined;
 }
 
 /** Flatten anything that reads badly aloud. */
