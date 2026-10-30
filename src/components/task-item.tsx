@@ -6,6 +6,7 @@ import { repoContextLine, type Task } from "@/lib/task-logic";
 import type { Tag } from "@/lib/queries";
 import { TagChip } from "./common";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Button } from "@/components/ui/button";
 
 export function dueLabel(task: Task, tz: string) {
   if (!task.due_at) return null;
@@ -201,23 +202,6 @@ export function TaskItem({
           </span>
         )}
         <button
-          onClick={guard(() => onToggle(task))}
-          aria-label={done ? "Mark as not done" : "Mark as done"}
-          className="-my-2.5 flex size-11 shrink-0 items-center justify-center rounded-lg focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <span
-            className={cn(
-              "flex size-5 items-center justify-center rounded-full border-[1.5px] transition-calm",
-              done
-                ? "border-primary bg-primary text-primary-foreground"
-                : "border-muted-foreground/40 hover:border-primary",
-              task.priority === "high" && !done && "border-overdue",
-            )}
-          >
-            {done && <Check className="size-3" />}
-          </span>
-        </button>
-        <button
           onClick={guard(() => onOpen?.(task))}
           className="min-w-0 flex-1 rounded-lg py-0.5 text-left focus-visible:ring-2 focus-visible:ring-ring"
         >
@@ -259,6 +243,15 @@ export function TaskItem({
             </p>
           )}
         </button>
+        <Button
+          variant={done ? "default" : "outline"}
+          size="icon"
+          onClick={guard(() => onToggle(task))}
+          aria-label={done ? "Mark as not done" : "Mark as done"}
+          className="size-11 shrink-0 self-center rounded-full"
+        >
+          <Check className="size-4" />
+        </Button>
       </div>
     </div>
   );

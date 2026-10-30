@@ -56,6 +56,37 @@ const TIMED_TASK_DURATION_MINUTES = 60;
  *
  * Includes proper escaping of summary/description, CRLF line endings, stable UID.
  */
+/** The "Repo: ..." line shared by the .ics DESCRIPTION and the Google Calendar `details` param. */
+function descriptionText(task: Task): string {
+  return `Repo: ${task.notes ? task.notes : "edge-daily-flow"}`;
+}
+
+/**
+ * All-day-vs-timed date range for a task, in the same basic ICS format (YYYYMMDD or
+ * YYYYMMDDTHHMMSSZ) that Google Calendar's `dates=` param also accepts — computed once so
+ * the .ics export and the Google Calendar link can't drift apart on the IST-offset logic.
+ */
+function calendarDateRange(task: Task, tz: string): { start: string; end: string } {
+  if (!task.due_at) {
+    throw new Error("Task has no due_at; cannot export to calendar");
+  }
+
+  if (task.all_day) {
+    // All-day event: use DATE format. End is exclusive, so it's the next day.
+    const start = formatIcsDate(new Date(task.due_at), tz);
+    const nextDay = new Date(new Date(task.due_at).getTime() + 24 * 60 * 60 * 1000);
+    const end = formatIcsDate(nextDay, tz);
+    return { start, end };
+  }
+
+  // Timed event: use UTC timestamps with a default 1-hour duration.
+  const dueDate = new Date(task.due_at);
+  const start = formatIcsUtcTime(dueDate);
+  const endDate = new Date(dueDate.getTime() + TIMED_TASK_DURATION_MINUTES * 60 * 1000);
+  const end = formatIcsUtcTime(endDate);
+  return { start, end };
+}
+
 export function buildCalendarEvent(task: Task, tz: string): string {
   if (!task.due_at) {
     throw new Error("Task has no due_at; cannot export to calendar");
@@ -69,27 +100,11 @@ export function buildCalendarEvent(task: Task, tz: string): string {
 
   // Build event summary and description
   const summary = escapeIcsText(task.title);
-  const descriptionText = task.notes ? task.notes : "edge-daily-flow";
-  const description = escapeIcsText(`Repo: ${descriptionText}`);
+  const description = escapeIcsText(descriptionText(task));
 
-  let dtstart: string;
-  let dtend: string;
-
-  if (task.all_day) {
-    // All-day event: use DATE format
-    dtstart = `DTSTART;VALUE=DATE:${formatIcsDate(new Date(task.due_at), tz)}`;
-    // DTEND is exclusive, so it's the next day for all-day events
-    const nextDay = new Date(new Date(task.due_at).getTime() + 24 * 60 * 60 * 1000);
-    dtend = `DTEND;VALUE=DATE:${formatIcsDate(nextDay, tz)}`;
-  } else {
-    // Timed event: use UTC timestamps
-    const dueDate = new Date(task.due_at);
-    dtstart = `DTSTART:${formatIcsUtcTime(dueDate)}`;
-
-    // Add default duration of 1 hour
-    const endDate = new Date(dueDate.getTime() + TIMED_TASK_DURATION_MINUTES * 60 * 1000);
-    dtend = `DTEND:${formatIcsUtcTime(endDate)}`;
-  }
+  const { start, end } = calendarDateRange(task, tz);
+  const dtstart = task.all_day ? `DTSTART;VALUE=DATE:${start}` : `DTSTART:${start}`;
+  const dtend = task.all_day ? `DTEND;VALUE=DATE:${end}` : `DTEND:${end}`;
 
   // Build the VEVENT
   const event = [
@@ -113,6 +128,25 @@ export function buildCalendarEvent(task: Task, tz: string): string {
   ];
 
   return calendar.join("\r\n");
+}
+
+/**
+ * A pre-filled "create event" link to calendar.google.com, using the same date-range
+ * logic as the .ics export (calendarDateRange) so the two can't disagree.
+ */
+export function googleCalendarUrl(task: Task, tz: string): string {
+  if (!task.due_at) {
+    throw new Error("Task has no due_at; cannot export to calendar");
+  }
+  const { start, end } = calendarDateRange(task, tz);
+  const params = new URLSearchParams({
+    action: "TEMPLATE",
+    text: task.title,
+    dates: `${start}/${end}`,
+    details: descriptionText(task),
+    ctz: tz,
+  });
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
 }
 
 /**
