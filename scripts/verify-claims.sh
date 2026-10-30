@@ -206,7 +206,7 @@ for doc in CLAUDE.md README.md AGENTS.md docs/*.md docs/plans/*.md .claude/agent
   while IFS= read -r target; do
     LINKS=$((LINKS + 1))
     resolved="$dir/${target%%#*}"
-    [ -e "$resolved" ] || BROKEN="$BROKEN $doc→$target"
+    [ -e "$resolved" ] || BROKEN="$BROKEN ${doc}→${target}"
   done < <(grep -oE '\]\([^)]+\)' "$doc" |
     sed 's/^](//; s/)$//' |
     grep -vE '^(https?:|mailto:|#)' |

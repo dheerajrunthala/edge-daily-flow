@@ -60,7 +60,7 @@ Supabase (Postgres 17, pgvector/HNSW, pg_cron, pg_net, Vault, Auth, Edge Functio
 Google Gemini (parsing, ranking, agent tool-calling, embeddings) · Model Context Protocol ·
 Gmail SMTP · Telegram Bot API · Web Push
 
-**13 Edge Functions · 20 migrations · 240 tests · 6 skills · 6 subagents · 2 hooks**
+**13 Edge Functions · 20 migrations · 240 tests · 9 skills · 8 subagents · 2 hooks**
 
 ---
 
