@@ -111,6 +111,81 @@ describe("precedence", () => {
   });
 });
 
+// ---------------------------------------------------------------- slot reading
+
+type AlexaSlot = {
+  name?: string;
+  value?: string;
+  resolutions?: {
+    resolutionsPerAuthority?: { values?: { value?: { name?: string } }[] }[];
+  };
+};
+
+function firstSlotValue(slots?: Record<string, AlexaSlot>): string {
+  if (!slots) return "";
+  const candidates: string[] = [];
+  for (const slot of Object.values(slots)) {
+    if (typeof slot?.value === "string" && slot.value.trim()) {
+      candidates.push(slot.value.trim());
+      continue;
+    }
+    const resolved =
+      slot?.resolutions?.resolutionsPerAuthority?.[0]?.values?.[0]?.value?.name?.trim();
+    if (resolved) candidates.push(resolved);
+  }
+  if (candidates.length === 0) return "";
+  return candidates.reduce((a, b) => (b.length > a.length ? b : a));
+}
+
+describe("reading the spoken words out of Alexa's slots", () => {
+  // The bug this exists for: the first version read `slots.query.value` and then
+  // `slots.text.value`. The interaction model is configured by hand, so when the slot ended
+  // up called anything else the skill replied "sorry, I did not catch that" to every single
+  // utterance — which sounds exactly like a speech recognition failure and is not one.
+  it.each(["query", "text", "utterance", "searchQuery", "somethingElse", "q"])(
+    "reads the value from a slot named %s",
+    (name) => {
+      expect(firstSlotValue({ [name]: { name, value: "what is due today" } })).toBe(
+        "what is due today",
+      );
+    },
+  );
+
+  it("prefers the longest value when several slots filled", () => {
+    // Alexa often fills a date or number slot alongside the free-text one. The long value is
+    // the sentence; the short one is a fragment of it.
+    expect(
+      firstSlotValue({
+        when: { name: "when", value: "today" },
+        query: { name: "query", value: "what is due today" },
+      }),
+    ).toBe("what is due today");
+  });
+
+  it("falls back to a resolved synonym when the raw value is absent", () => {
+    // A custom-type slot can arrive with no `value` but a resolution.
+    expect(
+      firstSlotValue({
+        topic: {
+          name: "topic",
+          resolutions: {
+            resolutionsPerAuthority: [{ values: [{ value: { name: "the news" } }] }],
+          },
+        },
+      }),
+    ).toBe("the news");
+  });
+
+  it.each([
+    ["no slots at all", undefined],
+    ["an empty slot map", {}],
+    ["a slot with no value", { query: { name: "query" } }],
+    ["a slot whose value is blank", { query: { name: "query", value: "   " } }],
+  ])("returns empty for %s", (_label, slots) => {
+    expect(firstSlotValue(slots as Record<string, AlexaSlot> | undefined)).toBe("");
+  });
+});
+
 describe("the function's copy of the rules matches this one", () => {
   const fn = readFileSync("supabase/functions/alexa-skill/index.ts", "utf8");
 
@@ -122,5 +197,12 @@ describe("the function's copy of the rules matches this one", () => {
 
   it("still requires the exclusion to suppress the task path", () => {
     expect(fn).toContain("!/\\b(add|create|remind|new|remember)\\b/.test(u)");
+  });
+
+  it("still reads slots by value rather than by name", () => {
+    // If someone reintroduces `slots.query.value`, the skill silently stops answering
+    // anything whenever the console names the slot differently.
+    expect(fn).toContain("firstSlotValue(body.request?.intent?.slots)");
+    expect(fn).not.toContain("slots?.query?.value");
   });
 });

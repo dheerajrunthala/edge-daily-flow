@@ -65,6 +65,23 @@ const VOICE_MAX_TURNS = 2;
  */
 const MAX_SKEW_MS = 150_000;
 
+/**
+ * One slot as Alexa sends it.
+ *
+ * `value` is what was heard. `resolutions` appears when the slot has a custom type and
+ * Alexa matched a synonym — a custom-type slot can arrive with a null `value` but a resolved
+ * name, so both are read.
+ */
+type AlexaSlot = {
+  name?: string;
+  value?: string;
+  resolutions?: {
+    resolutionsPerAuthority?: {
+      values?: { value?: { name?: string } }[];
+    }[];
+  };
+};
+
 type AlexaRequest = {
   version?: string;
   session?: { user?: { accessToken?: string } };
@@ -78,7 +95,7 @@ type AlexaRequest = {
     type?: string;
     timestamp?: string;
     locale?: string;
-    intent?: { name?: string; slots?: Record<string, { value?: string }> };
+    intent?: { name?: string; slots?: Record<string, AlexaSlot> };
     reason?: string;
   };
 };
@@ -190,11 +207,30 @@ async function handle(req: Request): Promise<Response> {
   // Every useful intent funnels into one free-text slot and lets the agent decide. A voice
   // interaction model with one AskIntent beats ten brittle intents, because the agent is
   // better at working out what was meant than a slot grammar is.
-  const utterance =
-    body.request?.intent?.slots?.query?.value ?? body.request?.intent?.slots?.text?.value ?? "";
+  // The slot is read by *value*, not by name. The first version looked for `query` and then
+  // `text`, so the moment the console ended up with a slot called something else the whole
+  // skill answered "sorry, I did not catch that" to everything — and from the outside that
+  // is indistinguishable from a speech recognition failure. The interaction model is
+  // configured by hand, so the slot name is not something this function gets to assume.
+  const utterance = firstSlotValue(body.request?.intent?.slots);
 
   if (!utterance) {
-    return speak("Sorry, I did not catch that.", false, "Try asking what is due today.");
+    // Logged with the intent name and slot shape, because "no words arrived" has several
+    // causes that sound identical to the user: a slot that did not fill, a sample utterance
+    // with no slot in it, or a different intent entirely.
+    console.error(
+      "[alexa] no utterance",
+      JSON.stringify({
+        intent: body.request?.intent?.name ?? null,
+        slots: body.request?.intent?.slots ?? null,
+        type,
+      }),
+    );
+    return speak(
+      "Sorry, I did not catch that. Try asking what is due today.",
+      false,
+      "Try asking what is due today.",
+    );
   }
 
   // ---------------------------------------------------------------- fast paths
@@ -382,6 +418,32 @@ function titles(list: { title: string }[]): string {
   const joined =
     names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
   return extra > 0 ? `${joined}, plus ${say(extra, "more")}` : joined;
+}
+
+/**
+ * The first thing the user actually said, whatever the slot is called.
+ *
+ * Reads by value rather than by name on purpose: this function cannot know what the
+ * interaction model named its slot, and guessing wrong makes the entire skill reply "sorry,
+ * I did not catch that" to every utterance. Prefers the longest value when several slots
+ * filled, because that is the free-text one rather than a stray date or number Alexa also
+ * recognised.
+ */
+function firstSlotValue(slots?: Record<string, AlexaSlot>): string {
+  if (!slots) return "";
+  const candidates: string[] = [];
+  for (const slot of Object.values(slots)) {
+    if (typeof slot?.value === "string" && slot.value.trim()) {
+      candidates.push(slot.value.trim());
+      continue;
+    }
+    // A custom-type slot can carry a resolved synonym with no raw value.
+    const resolved =
+      slot?.resolutions?.resolutionsPerAuthority?.[0]?.values?.[0]?.value?.name?.trim();
+    if (resolved) candidates.push(resolved);
+  }
+  if (candidates.length === 0) return "";
+  return candidates.reduce((a, b) => (b.length > a.length ? b : a));
 }
 
 /** Flatten anything that reads badly aloud. */
