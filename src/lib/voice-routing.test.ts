@@ -8,7 +8,8 @@
 //
 // The rules are duplicated here rather than imported because the Alexa function is Deno and
 // imports the Supabase client as a value. The final block asserts the patterns in the
-// function still match the ones under test — the drift guard for a sixth mirrored pair.
+// function still match the ones under test — the drift guard for the fifth of the five
+// places CLAUDE.md rule 5 lists.
 
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";

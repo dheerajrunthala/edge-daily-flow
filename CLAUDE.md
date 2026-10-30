@@ -17,14 +17,16 @@ carries the decisions, and the code only shows the outcome.
 | touch an Edge Function                   | [docs/operations.md](docs/operations.md) · skill `deploy-and-verify-fn`                 |
 | work on news, feeds or ingest            | [docs/news-pipeline.md](docs/news-pipeline.md) · skill `add-news-feed`                  |
 | work on the agent, `/ask` or the planner | [docs/agent-layer.md](docs/agent-layer.md)                                              |
+| add a front door (voice, a new client)   | skill `add-voice-surface` · [docs/agent-layer.md](docs/agent-layer.md)                  |
 | work on the MCP server                   | [docs/mcp-server.md](docs/mcp-server.md) · [docs/mcp-workflow.md](docs/mcp-workflow.md) |
 | work on reminders or any channel         | [docs/notifications.md](docs/notifications.md)                                          |
 | write or run tests                       | skill `write-tests` · [docs/testing.md](docs/testing.md)                                |
 | start a piece of work                    | skill `start-phase` · [docs/plans/](docs/plans/)                                        |
 | land a change                            | skill `ship-change`                                                                     |
-| debug something that does nothing        | **[docs/gotchas.md](docs/gotchas.md)**                                                  |
+| prove something actually ran             | skill `verify-production`                                                               |
+| debug something that does nothing        | skill `debug-silent-failure` · **[docs/gotchas.md](docs/gotchas.md)**                   |
 | pick a constant or threshold             | [docs/decisions.md](docs/decisions.md)                                                  |
-| know what is and isn't verified          | [docs/roadmap.md](docs/roadmap.md)                                                      |
+| know what is and isn't verified          | [docs/roadmap.md](docs/roadmap.md) · `npm run verify`                                   |
 | understand the tooling itself            | [docs/process.md](docs/process.md) · [docs/model-routing.md](docs/model-routing.md)     |
 
 ---
@@ -48,10 +50,16 @@ stale code for two days, and is how the `dayKey` bug once survived in half the p
 for follow-up linking was the _median_, and 0.60 for topic matching matched the entire archive.
 Run the distribution, read the actual pairs, and put the numbers in the migration comment.
 
-**5. Mirrored code drifts.** Pairs are duplicated because the browser and the Deno runtime
-cannot import from each other: `tz.ts`↔`time.ts`, `task-logic.ts`↔`tasks.ts`,
+**5. Mirrored code drifts.** Three module pairs are duplicated because the browser and the
+Deno runtime cannot import from each other: `tz.ts`↔`time.ts`, `task-logic.ts`↔`tasks.ts`,
 `queries.ts`↔`features.ts`. Touch one, check the other — or run the `mirror-drift-checker`
 agent. This has already caused a production outage.
+
+Two more copies live **inside test files**, because the real code cannot be imported at all:
+`voice-routing.test.ts` holds the Alexa fast-path patterns and `alexa-redirect.test.ts` holds
+the `/authorize` redirect allowlist. Each ends with a block asserting the source text of the
+real implementation still contains the rule under test — so changing the implementation
+without the test is caught, and five is the number of places to check, not three.
 
 **6. A user-level property is enforced in exactly one place.** Quiet hours live inside
 `notify.ts`; feature gates are read via `isEnabled()` at each function's entry point;
@@ -108,15 +116,17 @@ the MCP server uses a `de_…` token hashed into `api_tokens`.
 ## Tests
 
 ```bash
-npm test                  # 159 cases, 11 files, ~1.5s — the gate, no setup needed
-npm run test:contract     # all 12 Edge Functions boot and reach their handler
+npm run verify            # every claim this repo makes, PASS/FAIL per claim, ~13s
+npm test                  # 240 cases, 13 files, ~2s — the gate, no setup needed
+npm run test:contract     # all 13 Edge Functions boot and reach their handler
 npm run test:isolation    # cross-account security; needs two de_ tokens, exits 2 if unrun
-scripts/db-checks.sql     # 13 DB assertions via the Supabase MCP; a pass is silence
+scripts/db-checks.sql     # 13 DB assertions; run by npm run verify, or via the Supabase MCP
 ```
 
 The last three exist because the riskiest code cannot be reached by a unit test: the Edge
-runtime does not run locally, and RLS is database behaviour. Details and what is deliberately
-not covered: [docs/testing.md](docs/testing.md).
+runtime does not run locally, and RLS is database behaviour. `npm run verify` runs whatever
+it can reach and **reports a check it could not run as a skip, never as a pass**. Details and
+what is deliberately not covered: [docs/testing.md](docs/testing.md).
 
 ## Commits
 

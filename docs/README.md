@@ -1,7 +1,7 @@
 # Documentation map
 
 `CLAUDE.md` at the repo root holds the guidelines that must be in context for every session —
-117 lines. Everything else lives here and is loaded on demand.
+151 lines. Everything else lives here and is loaded on demand.
 
 That split is deliberate and is the project's biggest token saving: `CLAUDE.md` was 1,026 lines
 and loaded on every turn of every conversation, including turns that never touched the schema or
@@ -51,5 +51,13 @@ If you are evaluating rather than contributing, in this order:
 6. [roadmap.md](roadmap.md) — specifically each phase's "not yet exercised" list, which is
    where the honest limits are.
 
-Claims in these documents are reproducible. [mcp-workflow.md](mcp-workflow.md) ends with the
-SQL to verify the main ones.
+Claims in these documents are reproducible, and you do not have to take any of them on faith:
+
+```bash
+npm run verify              # 13s. Add -- --local for the checks that need no network.
+```
+
+One PASS/FAIL row per claim with the real number beside it, including the counts these
+documents quote. A check it could not run prints what it needed and counts as a **skip, never
+a pass**. See [testing.md](testing.md) for the tiers behind it, and
+[operations.md](operations.md) for why this exists instead of CI.

@@ -5,9 +5,9 @@
 // thing standing between a user and an attacker collecting their credential.
 //
 // The logic is duplicated here rather than imported because authorize.tsx is a route module
-// that pulls in AppShell, the Supabase client and the router. That is a fourth mirrored pair,
-// and the pair is kept honest by the last test in this file, which asserts the regex source
-// in the route still matches the one under test.
+// that pulls in AppShell, the Supabase client and the router. That makes this the fourth of
+// the five places CLAUDE.md rule 5 lists, and it is kept honest by the last test in this
+// file, which asserts the regex source in the route still matches the one under test.
 
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";

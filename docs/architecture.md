@@ -44,33 +44,39 @@ on only `is_saved`/`read_at`, `api_tokens` only `revoked_at`, `topics` only `ena
 declarations and the per-surface allowlist), `features.ts`, `notify.ts`, `tasks.ts`, `time.ts`,
 `feeds.ts`, `email.ts`, `push.ts`, `telegram.ts`, `api-tokens.ts`.
 
-## The five front doors
+## The six front doors
 
 ```
-   browser          Telegram        service worker      MCP client        cron
-   /ask, /tasks     @DailyEdgeBot   (tab closed)        Claude Code       (nobody)
-      │                 │                │                  │              │
-      │ user JWT        │ webhook secret │ HMAC token        │ de_… token   │ x-cron-secret
-      ▼                 ▼                ▼                  ▼              ▼
-   agent          telegram-webhook   push-action          mcp          plan-day
-      │                 │                │                  │              │
-      └─────────────────┴────────┬───────┴──────────────────┴──────────────┘
-                                 ▼
-                    _shared/agent-tools.ts
-              mine() · myRow() · parseInstant() · shapeTask()
-                     the ownership guard, one copy
-                                 ▼
-                             Postgres (RLS bypassed — service role)
+  browser         Telegram        Echo            service worker  MCP client      cron
+  /ask, /tasks    @DailyEdgeBot   voice intent    (tab closed)    Claude Code     (nobody)
+     │               │               │               │               │               │
+     │ user JWT      │ bot secret    │ de_ in body   │ HMAC token    │ de_ token     │ x-cron-secret
+     ▼               ▼               ▼               ▼               ▼               ▼
+  agent         telegram-webhook   alexa-skill     push-action       mcp          plan-day
+     │               │               │               │               │               │
+     └───────────────┴───────────────┴───────┬───────┴───────────────┴───────────────┘
+                                             ▼
+                                  _shared/agent-tools.ts
+                      mine() · myRow() · parseInstant() · shapeTask()
+                               the ownership guard, one copy
+                                             ▼
+                          Postgres (RLS bypassed — service role)
 ```
 
-Five different credentials, one guard. The tools run with the service role, which **bypasses
+Six doors, five kinds of credential, one guard. The tools run with the service role, which **bypasses
 RLS**, so the resolved `user_id` is all that separates two accounts — which is why it is not
-left to each handler to remember.
+left to each handler to remember. Two doors share a credential kind on purpose: Alexa's
+account linking hands back an ordinary `de_` row from `api_tokens`, the same kind the MCP
+server takes, so revoking it in Settings → Integrations stops the Echo immediately and there
+is no second credential system to keep in step.
 
 Each door gets a different tool set **by construction**, not by prompting: `chat` gets reads
 plus create and complete; `voice` loses complete, because a device in a room may have misheard
 and shows nothing back; `planner` is read-only, because it acts with nobody present.
-`delete_task` is absent from all four. → [agent-layer.md](agent-layer.md)
+`delete_task` is absent from all four — the MCP server has it because an editor can confirm
+first, and "delete the thing about the client" said out loud to a speaker is not a
+confirmation. → [agent-layer.md](agent-layer.md) and the `add-voice-surface` skill, which is
+the checklist for adding a seventh.
 
 ## Data flow
 
@@ -145,8 +151,9 @@ The full list with reasoning is [decisions.md](decisions.md). The six that shape
    list; links are copied from `articles`. There is no hallucinated URL to validate because
    there is no field for one. The agent extends it: an answer's links are checked against what
    its tools returned, and anything else is reported rather than stripped.
-4. **Permissions by construction.** Four surfaces, four tool sets, cron read-only. A prompt is
-   a request; an allowlist is a rule.
+4. **Permissions by construction.** Four agent surfaces, four tool sets, cron read-only. A
+   prompt is a request; an allowlist is a rule. Checkable after the fact too: every tool call
+   writes its `surface` into `mcp_tool_calls`.
 5. **Thresholds are measured.** Two were wrong when intuited — 0.85 for follow-ups was the
    _median_; 0.60 for topics matched the entire archive.
 6. **Claim before you spend, release on failure.** `brief_sends`, `task_notifications`,

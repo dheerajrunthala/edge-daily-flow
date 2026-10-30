@@ -96,19 +96,32 @@ after an isolation test, confirm the other account's rows are untouched.
 
 ## What exists today
 
-**159 automated tests across 11 files**, `npm test` in ~1.5s.
+**240 automated tests across 13 files**, `npm test` in ~2s. `npm run verify` prints the
+total, so a silent collection drop shows up as a changed number rather than as nothing.
 
-| file                             | focus                                                       | cases |
-| -------------------------------- | ----------------------------------------------------------- | ----- |
-| `_shared/feeds.test.ts`          | feed parsing, URL repair, junk filter, cross-source merging | 57    |
-| `src/lib/task-logic.test.ts`     | grouping, recurrence, on-time rate, feature parity (tier 2) | 28    |
-| `_shared/agent-registry.test.ts` | surface allowlists, citation checking (tier 5)              | 11    |
-| `_shared/time.test.ts`           | the `dayKey` regression and timezone helpers                | 8     |
-| `src/lib/task-view.test.ts`      | filter/sort/search state                                    | 5     |
-| `src/lib/tz.test.ts`             | browser timezone helpers                                    | 4     |
-| `_shared/gemini.test.ts`         | module-load safety, model constants                         | 4     |
-| `_shared/features.test.ts`       | default resolution                                          | 3     |
-| `src/test/app-routing.test.tsx`  | routing smoke                                               | 1     |
+| file                             | focus                                                        | cases |
+| -------------------------------- | ------------------------------------------------------------ | ----- |
+| `_shared/feeds.test.ts`          | feed parsing, URL repair, junk filter, cross-source merging  | 57    |
+| `src/lib/voice-routing.test.ts`  | which utterances take the model-free fast path; slot reading | 49    |
+| `src/lib/alexa-redirect.test.ts` | the `/authorize` `redirect_uri` allowlist, host **and** path | 28    |
+| `src/lib/task-logic.test.ts`     | grouping, recurrence, on-time rate, feature parity (tier 2)  | 28    |
+| `src/lib/insights.test.ts`       | Insights aggregation, over real rows trimmed from 2026-10-30 | 21    |
+| `src/lib/calendar.test.ts`       | the `.ics` export and the Google Calendar URL                | 20    |
+| `_shared/agent-registry.test.ts` | surface allowlists, citation checking (tier 5)               | 12    |
+| `_shared/time.test.ts`           | the `dayKey` regression and timezone helpers                 | 8     |
+| `src/lib/task-view.test.ts`      | filter/sort/search state                                     | 5     |
+| `src/lib/tz.test.ts`             | browser timezone helpers                                     | 4     |
+| `_shared/gemini.test.ts`         | module-load safety, model constants                          | 4     |
+| `_shared/features.test.ts`       | default resolution                                           | 3     |
+| `src/test/app-routing.test.tsx`  | routing smoke                                                | 1     |
+
+Two of those files are a different shape and worth knowing about.
+`voice-routing.test.ts` and `alexa-redirect.test.ts` hold their **own copy** of a rule whose
+implementation vitest cannot import — `alexa-skill/index.ts` imports the Supabase client as a
+value, and `authorize.tsx` is a route module pulling in AppShell and the router. Each ends
+with a block asserting the real source text still contains the rule under test, which is what
+stops the tests passing against a copy the implementation has moved on from. They are the
+fourth and fifth of the five places CLAUDE.md rule 5 lists.
 
 The 57 `feeds.test.ts` cases are the interesting ones: 941 lines of the gnarliest code in the
 project had **zero** tests, while [gotchas.md](gotchas.md) and
@@ -126,11 +139,21 @@ These were a _practice_ before — every one of them had been run, by hand, thro
 Supabase MCP, in a session transcript nobody else could re-run. A reviewer cannot re-run a
 transcript and a regression cannot be caught by one.
 
-| script                              | tier | run it with                       |
-| ----------------------------------- | ---- | --------------------------------- |
-| `scripts/db-checks.sql`             | 3    | the Supabase MCP `execute_sql`    |
-| `scripts/contract/boot-smoke.ts`    | 4    | `npm run test:contract`           |
-| `scripts/contract/mcp-isolation.ts` | 4    | `npm run test:isolation` + tokens |
+| script                              | tier | run it with                                         |
+| ----------------------------------- | ---- | --------------------------------------------------- |
+| `scripts/db-checks.sql`             | 3    | `npm run verify`, or the Supabase MCP `execute_sql` |
+| `scripts/contract/boot-smoke.ts`    | 4    | `npm run verify`, or `npm run test:contract`        |
+| `scripts/contract/mcp-isolation.ts` | 4    | `npm run test:isolation` + two tokens               |
+
+All three, plus the local checks, run from one command — `npm run verify`
+(`scripts/verify-claims.sh`), which prints PASS/FAIL per claim with the real numbers. It
+reports a check it could not run as a **skip, never a pass**: with no
+`SUPABASE_ACCESS_TOKEN` the live rows say so on the line, and the exit code counts failures
+only. `db-checks.sql` reaches the database through
+`POST /v1/projects/{ref}/database/query`, the endpoint the hosted Supabase MCP server calls
+underneath `execute_sql` — same transport, no session needed. `scripts/verify/live-sql.mjs`
+re-checks the destructive-SQL deny list before sending, because that HTTPS path is a second
+door into production with the PreToolUse hook nowhere near it.
 
 `npm test` stays the fast unit suite. Contract tests hit the network and are not in the
 inner loop.
@@ -161,7 +184,7 @@ index with the wrong operator class) and roll it back.
 
 ### `boot-smoke.ts` — and why a 401 is not proof of boot
 
-A missing export is a **boot failure**, not a type error: the isolate refuses to start,
+Thirteen probes, one per function. A missing export is a **boot failure**, not a type error: the isolate refuses to start,
 pg_net records `BOOT_ERROR`, and the function logs are empty — indistinguishable from a
 function nobody called. `npm run build` cannot see it, because the Deno bundle is assembled
 on deploy from specifiers Vite never resolves.
@@ -224,7 +247,9 @@ Each of these has evidence in the database or the git log:
 - the `agent` happy path from a browser session — **owner-assigned**, since no session can be
   minted here
 - dictation on a real microphone
-- the `voice` and `telegram` registry surfaces
+- the `telegram` registry surface. The `voice` surface **is** now exercised: 8 tool calls
+  recorded against `surface = 'voice'`, 0 failed — though from the skill's own invocations,
+  not from a real Echo, which stays owner-assigned
 - the web-push action buttons end to end, and 404/410 expiry pruning
 - the `--rate-limit` block of `mcp-isolation.ts`, which is opt-in: running it spends an
   account's whole hourly budget, so it is not part of a normal run

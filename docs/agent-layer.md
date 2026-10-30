@@ -222,4 +222,4 @@ it off. A toggle that only hides a nav item is decoration.
 - `filterEnabled()` narrows a list of ids in one query, because the cron functions iterate
   users and a round trip each is exactly the per-user cost the pipeline avoids.
 - The browser's copy (`FEATURES`/`featureDefault` in `src/lib/queries.ts`) and the Edge copy
-  are a **fourth mirrored pair** — see the drift note below. There is a parity test.
+  are the **third mirrored pair** — see the drift note below. There is a parity test.

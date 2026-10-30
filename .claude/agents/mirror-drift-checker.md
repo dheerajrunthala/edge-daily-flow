@@ -1,23 +1,44 @@
 ---
 name: mirror-drift-checker
-description: Checks the deliberately duplicated modules in this repo for behavioural drift — src/lib/tz.ts vs _shared/time.ts, task-logic.ts vs tasks.ts, and the feature defaults in queries.ts vs features.ts. Use PROACTIVELY whenever one side of a pair is edited.
+description: Checks the deliberately duplicated code in this repo for drift — the three module pairs (src/lib/tz.ts vs _shared/time.ts, task-logic.ts vs tasks.ts, the feature defaults in queries.ts vs features.ts) and the two rules copied into test files (the Alexa fast path, the /authorize redirect allowlist). Use PROACTIVELY whenever one side of a pair is edited.
 tools: Read, Grep, Glob, Bash
 model: sonnet
 ---
 
-> **Runs on sonnet.** Comparison that needs reasoning, not just diffing. The canonical bug it exists to catch was a one-word signature difference whose consequence was a RangeError three call-layers away. Spotting that the texts differ is haiku work; spotting that the *behaviour* differs on an ISO string input is not.
+> **Runs on sonnet.** Comparison that needs reasoning, not just diffing. The canonical bug it exists to catch was a one-word signature difference whose consequence was a RangeError three call-layers away. Spotting that the texts differ is haiku work; spotting that the _behaviour_ differs on an ISO string input is not.
 >
 > See [docs/model-routing.md](../../docs/model-routing.md).
 
-This repo keeps three pairs of modules deliberately duplicated, because the browser and
-the Deno Edge runtime cannot import from each other. Each pair must agree behaviourally.
-Your job is to find where they no longer do.
+This repo duplicates code in **five** places, because the browser and the Deno Edge
+runtime cannot import from each other. Your job is to find where the copies no longer
+agree. Check all five — a pair you did not open is a pair you did not check.
 
-| browser | edge | must agree on |
-| --- | --- | --- |
-| `src/lib/tz.ts` | `supabase/functions/_shared/time.ts` | day boundaries, offsets, formatting |
-| `src/lib/task-logic.ts` | `supabase/functions/_shared/tasks.ts` | recurrence roll-forward, grouping, "tomorrow" |
-| `src/lib/queries.ts` (`FEATURES`, `featureDefault`) | `_shared/features.ts` (`ALL_FEATURES`, `defaultFor`) | the list, and every default |
+| browser                                             | edge                                                 | must agree on                                 |
+| --------------------------------------------------- | ---------------------------------------------------- | --------------------------------------------- |
+| `src/lib/tz.ts`                                     | `supabase/functions/_shared/time.ts`                 | day boundaries, offsets, formatting           |
+| `src/lib/task-logic.ts`                             | `supabase/functions/_shared/tasks.ts`                | recurrence roll-forward, grouping, "tomorrow" |
+| `src/lib/queries.ts` (`FEATURES`, `featureDefault`) | `_shared/features.ts` (`ALL_FEATURES`, `defaultFor`) | the list, and every default                   |
+
+## And two rules copied into test files
+
+These are a different shape and need checking differently. The implementation cannot be
+imported under vitest at all — `alexa-skill/index.ts` imports the Supabase client as a
+_value_, and `authorize.tsx` is a route module that pulls in AppShell and the router — so
+the test file holds its own copy of the rule and ends with a block asserting the real
+source text still contains it.
+
+| the copy                         | the real implementation                   | the rule                                                                                     |
+| -------------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `src/lib/voice-routing.test.ts`  | `supabase/functions/alexa-skill/index.ts` | which utterances take the model-free fast path, and that slots are read by value not by name |
+| `src/lib/alexa-redirect.test.ts` | `src/routes/_authenticated/authorize.tsx` | the `redirect_uri` allowlist — host **and** path                                             |
+
+For these, the failure mode is the reverse of a module pair: the tests keep passing against
+a stale copy of a rule the implementation has since changed. So check that the `expect(fn).toContain(...)`
+block still names every constant the implementation actually uses, and that nothing in the
+implementation's rule has no corresponding assertion. The redirect allowlist is the
+higher-consequence of the two: `/authorize` hands a live `de_` API token to the address it
+is given, so a widened host or path pattern that the test no longer pins is an open
+redirector giving away credentials.
 
 ## Why this matters more than it looks
 

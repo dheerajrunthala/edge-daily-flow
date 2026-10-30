@@ -249,6 +249,31 @@ else
   record FAIL "the README's headline counts are true" "stale:$STALE"
 fi
 
+# --- CLAUDE.md is as short as four documents say it is ----------------------------------
+#
+# Four files quote the line count, because "CLAUDE.md is small on purpose" is a claim about
+# a number and the number moves every time a rule is added. The pattern below matches a
+# three-digit count in the 100s followed by " lines", plus the comment form in process.md,
+# and deliberately does not match "1,026 lines" (the before figure) or "941 lines" (feeds.ts).
+CLAUDE_REAL=$(grep -c '' CLAUDE.md)
+CLAUDE_SAID=$(
+  {
+    grep -rhoE '1[0-9][0-9] lines' README.md CLAUDE.md docs/*.md
+    # Trimmed before "1026" on purpose: that string contains "102" and matched as a count.
+    grep -rhoE '# 1[0-9][0-9], down from' docs/*.md
+  } | grep -oE '1[0-9][0-9]' | sort -u
+)
+CLAUDE_N=$(printf '%s\n' "$CLAUDE_SAID" | grep -c .)
+if [ "$CLAUDE_N" -eq 0 ]; then
+  record FAIL "CLAUDE.md is as short as the docs say" "no document states a line count"
+elif [ "$CLAUDE_SAID" = "$CLAUDE_REAL" ]; then
+  record PASS "CLAUDE.md is as short as the docs say" \
+    "$CLAUDE_REAL lines, agreed by every document that says so"
+else
+  record FAIL "CLAUDE.md is as short as the docs say" \
+    "is $CLAUDE_REAL; documents say $(printf '%s' "$CLAUDE_SAID" | tr '\n' '/')"
+fi
+
 # ═════════════════════════════════════════════════════════ 2. network, no credentials
 
 if [ "$LOCAL_ONLY" = "1" ]; then

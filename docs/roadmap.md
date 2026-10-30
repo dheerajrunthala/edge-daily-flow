@@ -69,7 +69,8 @@ Every phase entry names its own unverified paths on purpose, so "deployed" is ne
       host-timezone bug in `parseFeedDate`.
       **Not yet exercised:** the `agent` function's happy path from a browser session (a user
       JWT cannot be minted from a Claude Code session — the owner must try `/ask`), dictation
-      on a real microphone, and the `voice` and `telegram` surfaces of the registry.
+      on a real microphone, and the `telegram` surface of the registry. The `voice` surface was
+      exercised in Phase 10.
 - [ ] Phase 9: **submission hardening.** Delivers: the process layer as committed skills
       (`start-phase`, `write-tests`, `ship-change`), `fanout_build_digests()` so one slow user
       cannot starve the rest, a reconciler for digests left `pending` by a killed isolate, an
@@ -88,6 +89,11 @@ Every phase entry names its own unverified paths on purpose, so "deployed" is ne
       `embed_content` at **100 requests/minute** and `batchEmbedContents` counts each text,
       so no retry policy could have fixed it. Also found: `plan-day` had no cron row at all,
       and three `pending` digests were unreachable by any future run.
+      **Closed, measured 2026-10-30:** `select count(*) from articles where embedding is null`
+      is now **0** of 2,651, down from the 797 found on entry. The `repair-embeddings` job at
+      :07 past the hour drained the backlog without ever competing with the 01:00 ingest
+      fan-out for the same 100-requests-per-minute quota, which was the whole point of the
+      odd offset.
       **Insights is done (2026-10-30).** `MIN_PER_ARTICLE = 3` is deleted — the page had been
       multiplying articles scanned by an invented three minutes and calling it "reading time
       saved". What replaced it reads the tables Phase 8 filled and nothing else: four tiles
@@ -108,7 +114,9 @@ Every phase entry names its own unverified paths on purpose, so "deployed" is ne
       topic; see Rejected in `docs/decisions.md`.
       **Will remain unverified:** the `agent` happy path from a browser session (a user JWT
       cannot be minted outside one — **owner-assigned**), dictation on a real microphone, the
-      `voice` and `telegram` registry surfaces, and the web-push action buttons.
+      `telegram` registry surface, and the web-push action buttons. The `voice` surface came
+      off this list in Phase 10 — `mcp_tool_calls` holds 8 rows at `surface = 'voice'`, 0
+      failed — though from the skill's own invocations, not from a real Echo.
 - [x] Phase 10: **the voice door.** `alexa-skill` on the existing `voice` surface, plus
       `/authorize` for OAuth2 **implicit-grant** account linking. Implicit rather than
       authorization-code because the credential it returns is already long-lived and
@@ -129,7 +137,39 @@ Every phase entry names its own unverified paths on purpose, so "deployed" is ne
       certification.
       **Not yet exercised:** the skill from a real Echo device, and the linking flow end to end
       through the Alexa app — both need the Amazon developer console, which is owner-assigned.
-- [ ] Phase 11 (optional): Google Calendar two-way sync so the planner can see when you are
+- [x] Phase 11: **the claims harness.** `npm run verify` (`scripts/verify-claims.sh` plus
+      `scripts/verify/live-sql.mjs`): fourteen claims in one command, grouped by what each
+      needs, printed as a PASS/FAIL table with the real number beside it. It replaces the SQL
+      the README used to ask a reader to paste by hand, and it makes `scripts/db-checks.sql`
+      runnable from a shell rather than only from an agent session — through
+      `POST /v1/projects/{ref}/database/query`, the endpoint the hosted Supabase MCP server
+      calls underneath `execute_sql`. Also three skills for procedures that had become tacit
+      (`verify-production`, `debug-silent-failure`, `add-voice-surface`) and two subagents for
+      jobs that were being done by hand (`test-writer` on sonnet, `latency-auditor` on haiku).
+      **Verified 2026-10-30:** 13 passed, 1 skipped — 240 tests across 13 files, 0 lint
+      errors, 13/13 of the destructive-SQL hook's cases in both directions, 8 agents each with
+      an explicit model and none on opus, 13/13 Edge Functions booting and reaching their
+      handler (the thirteenth probe, `alexa-skill`, is new), all 13 database assertions
+      silent, 0 of account A's rows leaked when asking `match_news_items` as account B, 92
+      tool calls across 3 surfaces with 1 failure, and 15 follow-up links across 12 digests.
+      The one skip is the cross-account isolation suite, which needs two accounts' `de_`
+      tokens and stays **owner-assigned**; it prints what it needed rather than passing.
+      **Found while building it:** three of the harness's own claim queries read the wrong
+      value, because the Management API keys rows by column name — two columns both called
+      `count` collapsed in `JSON.parse` and the row came back a field short with a plausible
+      number sitting in the wrong place. Also: code is deliberately duplicated in **five**
+      places and CLAUDE.md rule 5 listed three, with the ordinals in two test-file comments
+      disagreeing with each other.
+      **Known drift, not fixed:** `supabase_migrations.schema_migrations` holds 22 rows while
+      the repo holds 20 files, and three names do not line up — the repo has
+      `fanout_build_digests` where the database has `fanout_build_digests_and_schedules`, and
+      the database has `topics_measured_threshold` and `vector_retrieval_followup_threshold`
+      with no file of either name. The schemas agree; the bookkeeping does not. Reconciling it
+      means renaming already-applied migrations, so it is **owner-assigned**.
+      **Not yet exercised:** `test-writer` and `latency-auditor` have not been invoked in
+      anger, and `npm run verify` has only ever run on one machine — `--local` is the path
+      that is portable by construction.
+- [ ] Phase 12 (optional): Google Calendar two-way sync so the planner can see when you are
       free, WhatsApp, the weekly review email, Telegram free text through the agent, and
       Playwright E2E. ChatGPT as an MCP client is now closer too: `/authorize` exists, and
       wiring it to the `mcp` function is a small step from here.

@@ -17,8 +17,8 @@ covers both, with the evidence from this repo rather than a description of the p
 
 ### The problem it solves
 
-Daily Edge has twelve Edge Functions on Deno, a Postgres database with pgvector and pg_cron,
-and six cron schedules. None of it runs locally: there is no Docker here, the Edge runtime
+Daily Edge has thirteen Edge Functions on Deno, a Postgres database with pgvector and
+pg_cron, and eight cron schedules. None of it runs locally: there is no Docker here, the Edge runtime
 cannot be emulated, and a user JWT cannot be minted outside a browser session because the
 service role key exists only in the platform's secret store.
 
@@ -260,7 +260,19 @@ real, read-only access to the thing it is reviewing.
 
 ## Reproducing the claims
 
-Everything above is checkable. With the Supabase MCP connected:
+Everything above is checkable, and most of it in one command:
+
+```bash
+npm run verify
+```
+
+That runs the 13 assertions in `scripts/db-checks.sql`, boots all thirteen functions, and
+asks the three questions below, printing PASS/FAIL per claim with the real number. It
+reaches the database through `POST /v1/projects/{ref}/database/query` — the endpoint the
+hosted Supabase MCP server calls underneath `execute_sql` — so the same checks run from a
+shell as from a session. A check it could not run is a **skip, never a pass**.
+
+The queries, for reading by hand or adapting. With the Supabase MCP connected:
 
 ```sql
 -- the audit trail, by door
@@ -278,9 +290,14 @@ where m.id in (select id from news_items where user_id = (select user_id from se
 -- the schedules, including the two this phase added
 select jobname, schedule from cron.job order by jobname;
 
--- the embedding backlog draining on its own
+-- the embedding backlog draining on its own: 0 of 2,651 as of 2026-10-30
 select count(*) filter (where embedding is null) as missing, count(*) as total from articles;
 ```
+
+Alias every column if you run these through `scripts/verify/live-sql.mjs` rather than the
+MCP. The Management API answers with JSON objects keyed by column name, so two columns both
+called `count` collapse into one and the row comes back a field short with a plausible
+number in the wrong place.
 
 And the guard:
 

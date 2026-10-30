@@ -3,11 +3,13 @@
 **Your day, run by an agent you can reach from anywhere.**
 
 A personal task manager and AI-curated daily news brief — live at
-**https://dailyedgeapp.lovable.app** with real users and seventeen days of production cron runs.
+**https://dailyedgeapp.lovable.app** with real users and production cron runs every day since
+2026-10-12.
 
 Every productivity tool assumes you come to it. Daily Edge inverts that: one agent, one tool
-registry, reachable from the web app, a Telegram bot, desktop notifications, **any MCP client
-you already have open**, and from nobody at all — it runs your morning on a schedule.
+registry, reachable from the web app, a Telegram bot, desktop notifications, **an Alexa
+device you talk to**, **any MCP client you already have open**, and from nobody at all — it
+runs your morning on a schedule.
 
 ---
 
@@ -47,7 +49,7 @@ is worse than a wrong summary — the summary is visibly an opinion, a URL looks
 | **[docs/decisions.md](docs/decisions.md)**       | Decisions worth not relitigating, and every measured constant with how it was measured.         |
 | **[docs/process.md](docs/process.md)**           | The skills, subagents and hooks in `.claude/`, and the findings each produced.                  |
 | **[docs/README.md](docs/README.md)**             | Full documentation map.                                                                         |
-| **[CLAUDE.md](CLAUDE.md)**                       | The guidelines loaded into every agent session — 117 lines, by design.                          |
+| **[CLAUDE.md](CLAUDE.md)**                       | The guidelines loaded into every agent session — 151 lines, by design.                          |
 | **[docs/roadmap.md](docs/roadmap.md)**           | What is built, what is verified, and what is **not yet exercised**.                             |
 | **[docs/plans/](docs/plans/)**                   | Self-contained implementation plans for the remaining work.                                     |
 
@@ -128,13 +130,14 @@ One row per claim, with the real number beside it. On this machine, just now:
 
 ```
 ── local — no network, no credentials
-PASS  the unit suite passes with no setup                  240 tests, 13 files, 1.90s
+PASS  the unit suite passes with no setup                  240 tests, 13 files, 1.89s
 PASS  eslint reports no errors                             0 errors, 12 warnings (shadcn's, in components/ui)
 PASS  the destructive-SQL hook holds in both directions    13/13 — 7 blocked, 6 let through
-PASS  every subagent declares a model, none is opus        6 agents — 3 haiku, 3 sonnet
+PASS  every subagent declares a model, none is opus        8 agents — 4 haiku, 4 sonnet
 PASS  every Edge Function pins verify_jwt in config.toml   13/13 functions listed
-PASS  every relative link in the docs resolves             89 links checked
+PASS  every relative link in the docs resolves             103 links checked
 PASS  the README's headline counts are true                all 6 match
+PASS  CLAUDE.md is as short as the docs say                151 lines, agreed by every document that says so
 
 ── deployed — needs network, no credentials (the anon key is public by design)
 PASS  every Edge Function boots and reaches its handler    13/13 functions booted
@@ -148,19 +151,20 @@ PASS  stories thread themselves by similarity alone        15 items point at an 
 ── cross-account — needs two accounts' de_ tokens
 SKIP  one account's MCP token cannot touch another's rows  no DAILY_EDGE_TOKEN_A/_B — mint them in Settings → Integrations
 
-12 passed, 1 skipped
+13 passed, 1 skipped
 ```
 
 Three things about that output are the point:
 
 **A skipped check is never a pass.** Each group says which credential it needs and how to get
 it, the skip count is printed separately from the pass count, and the exit code counts
-failures only. With no `SUPABASE_ACCESS_TOKEN` the five live rows go to `SKIP` with the reason
-on the line; they never silently go green.
+failures only. With no `SUPABASE_ACCESS_TOKEN` the four live rows go to `SKIP` with the
+reason on the line; they never silently go green.
 
-**The README's own numbers are one of the checks.** The counts line under
-[Stack](#stack) is parsed and compared against the repo, so this file going stale is a
-test failure rather than something a reader has to catch.
+**The README's own numbers are one of the checks.** The counts line under [Stack](#stack) is
+parsed and compared against the repo, and so is the CLAUDE.md line count that four
+documents quote — so this file going stale is a test failure rather than something a reader
+has to catch.
 
 **The database assertions really run.** `scripts/db-checks.sql` is posted to
 `POST /v1/projects/{ref}/database/query` — the endpoint the hosted Supabase MCP server calls

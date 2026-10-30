@@ -54,7 +54,7 @@ context rather than a subagent's slice.
 
 Model choice is the smaller half. The larger half is **not sending context you do not need**:
 
-- **CLAUDE.md is 141 lines, down from 1,026.** It loads into every single session, so a
+- **CLAUDE.md is 151 lines, down from 1,026.** It loads into every single session, so a
   thousand lines of reference material was being paid for on every turn of every conversation
   — including turns that never touched the schema or the news pipeline. The detail moved to
   `docs/`, indexed by a table of "if you are about to do X, read Y", so it is loaded on demand

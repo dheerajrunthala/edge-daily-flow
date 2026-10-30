@@ -104,6 +104,14 @@ new path — it is the exact production path.
     Done / Snooze 1h / Tomorrow buttons. Always answers 200 after the secret check, because a
     non-200 makes Telegram redeliver the update forever. Also self-registers on
     `{"register": true}` + `x-cron-secret`.
+13. `alexa-skill` (**no JWT**; the account-linking access token in the request **body**,
+    resolved by the same `requireApiToken()` the MCP server uses) — the voice door, on the
+    `voice` surface. One free-text `AskIntent` funnels into the agent rather than ten brittle
+    slot intents, behind a model-free fast path for the common asks. Sized to Alexa's ~8s
+    patience: flash-lite directly with no fallback, a 4s per-call deadline and a 2-turn cap —
+    see the `add-voice-surface` skill for why. Gated on the `voice` feature. Checks
+    `applicationId` and request freshness; Amazon's certificate-chain signature verification
+    is **not** implemented and is recorded as a known gap in [roadmap.md](roadmap.md).
 
 ## Why `repair-embeddings` runs at :07 and not `*/10`
 

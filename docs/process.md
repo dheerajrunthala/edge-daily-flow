@@ -134,6 +134,6 @@ Where a human is in the loop, deliberately:
 ls .claude/skills/                                      # 9
 grep -h "^name:\|^model:" .claude/agents/*.md | paste - -   # 8, with models
 jq '.hooks | keys' .claude/settings.json                # PreToolUse, PostToolUse
-wc -l CLAUDE.md                                         # 141, down from 1026
+wc -l CLAUDE.md                                         # 151, down from 1026
 npm run verify                                          # asserts every count above
 ```
