@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as AuthenticatedAskRouteImport } from './routes/_authenticated/ask'
 import { Route as AuthenticatedBriefRouteImport } from './routes/_authenticated/brief'
 import { Route as AuthenticatedInsightsRouteImport } from './routes/_authenticated/insights'
 import { Route as AuthenticatedNewsRouteImport } from './routes/_authenticated/news'
@@ -32,6 +33,11 @@ const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AuthenticatedAskRoute = AuthenticatedAskRouteImport.update({
+  id: '/ask',
+  path: '/ask',
+  getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedBriefRoute = AuthenticatedBriefRouteImport.update({
   id: '/brief',
@@ -67,6 +73,7 @@ const AuthenticatedTasksRoute = AuthenticatedTasksRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/ask': typeof AuthenticatedAskRoute
   '/brief': typeof AuthenticatedBriefRoute
   '/insights': typeof AuthenticatedInsightsRoute
   '/news': typeof AuthenticatedNewsRoute
@@ -77,6 +84,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/ask': typeof AuthenticatedAskRoute
   '/brief': typeof AuthenticatedBriefRoute
   '/insights': typeof AuthenticatedInsightsRoute
   '/news': typeof AuthenticatedNewsRoute
@@ -89,6 +97,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/_authenticated': typeof AuthenticatedRouteRouteWithChildren
   '/login': typeof LoginRoute
+  '/_authenticated/ask': typeof AuthenticatedAskRoute
   '/_authenticated/brief': typeof AuthenticatedBriefRoute
   '/_authenticated/insights': typeof AuthenticatedInsightsRoute
   '/_authenticated/news': typeof AuthenticatedNewsRoute
@@ -101,6 +110,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/login'
+    | '/ask'
     | '/brief'
     | '/insights'
     | '/news'
@@ -111,6 +121,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/login'
+    | '/ask'
     | '/brief'
     | '/insights'
     | '/news'
@@ -122,6 +133,7 @@ export interface FileRouteTypes {
     | '/'
     | '/_authenticated'
     | '/login'
+    | '/_authenticated/ask'
     | '/_authenticated/brief'
     | '/_authenticated/insights'
     | '/_authenticated/news'
@@ -158,6 +170,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_authenticated/ask': {
+      id: '/_authenticated/ask'
+      path: '/ask'
+      fullPath: '/ask'
+      preLoaderRoute: typeof AuthenticatedAskRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/brief': {
       id: '/_authenticated/brief'
@@ -205,6 +224,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AuthenticatedRouteRouteChildren {
+  AuthenticatedAskRoute: typeof AuthenticatedAskRoute
   AuthenticatedBriefRoute: typeof AuthenticatedBriefRoute
   AuthenticatedInsightsRoute: typeof AuthenticatedInsightsRoute
   AuthenticatedNewsRoute: typeof AuthenticatedNewsRoute
@@ -214,6 +234,7 @@ interface AuthenticatedRouteRouteChildren {
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
+  AuthenticatedAskRoute: AuthenticatedAskRoute,
   AuthenticatedBriefRoute: AuthenticatedBriefRoute,
   AuthenticatedInsightsRoute: AuthenticatedInsightsRoute,
   AuthenticatedNewsRoute: AuthenticatedNewsRoute,

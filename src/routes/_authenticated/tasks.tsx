@@ -16,7 +16,7 @@ import { QuickAdd } from "@/components/quick-add";
 import { TaskItem } from "@/components/task-item";
 import { TaskToolbar, type TaskFilters } from "@/components/task-filters";
 import { TaskBulkBar } from "@/components/task-bulk-bar";
-import { SnoozeSheet, TaskMenuSheet } from "@/components/task-sheets";
+import { SnoozeSheet, TaskDetailSheet, TaskMenuSheet } from "@/components/task-sheets";
 import { TaskDialog, emptyDraft, taskToDraft, type TaskDraft } from "@/components/task-form";
 import { useNotifyPrefs, useTags, useTasks, useToggleTask, useTz } from "@/lib/queries";
 import { useTaskActions } from "@/lib/task-actions";
@@ -81,6 +81,7 @@ function TasksPage() {
   });
   const [snoozing, setSnoozing] = useState<Task | null>(null);
   const [menuFor, setMenuFor] = useState<Task | null>(null);
+  const [viewing, setViewing] = useState<Task | null>(null);
   const [collapsed, setCollapsed] = useState<string[]>([]);
   const [sel, setSel] = useState<Set<string>>(new Set());
   const quickRef = useRef<HTMLInputElement>(null);
@@ -235,7 +236,7 @@ function TasksPage() {
     tz,
     tags,
     onToggle: (x: Task) => toggle.mutate(x),
-    onOpen: open,
+    onOpen: setViewing,
     overdue,
     onSwipeSnooze: t.status === "done" ? undefined : setSnoozing,
     onMenu: setMenuFor,
@@ -303,7 +304,7 @@ function TasksPage() {
             month={search.month}
             onMonth={(m) => patch({ month: m })}
             tagColor={(n) => tags.find((t) => t.name === n)?.color}
-            onOpen={open}
+            onOpen={setViewing}
             onNew={openNew}
           />
         ) : groups.length === 0 ? (
@@ -405,6 +406,18 @@ function TasksPage() {
         onToggle={(t) => toggle.mutate(t)}
         onSnooze={setSnoozing}
         onDelete={(t) => actions.remove([t])}
+      />
+
+      <TaskDetailSheet
+        task={viewing}
+        tz={tz}
+        tags={tags}
+        onClose={() => setViewing(null)}
+        onToggle={(t) => toggle.mutate(t)}
+        onEdit={(t) => {
+          setViewing(null);
+          open(t);
+        }}
       />
 
       <TaskDialog

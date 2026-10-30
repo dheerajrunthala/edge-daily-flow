@@ -34,3 +34,35 @@ verify_jwt = false
 # api_tokens, then every query scoped to the user id it resolves to.
 [functions.mcp]
 verify_jwt = false
+
+# push-subscribe and push-action were deployed before this file listed them, and both run
+# with the platform gate off in production — so they are pinned here to match. Without
+# these two blocks the CLI defaults them to verify_jwt = true, and the first `supabase
+# functions deploy` would quietly break what they do.
+#
+# push-subscribe does its own auth with requireUser(), so the gate is redundant rather
+# than absent. push-action is the one that matters: it is reached from the service worker,
+# which has no Supabase session at all, and authenticates with the HMAC action token in
+# the notification payload. Turning the gate on would reject every Done and Snooze press
+# with a 401 before the handler could check the signature it actually trusts.
+[functions.push-subscribe]
+verify_jwt = false
+
+[functions.push-action]
+verify_jwt = false
+
+# topics is called from the browser with the user's session JWT, and embeds the label with
+# Gemini server-side — the browser never holds that key.
+[functions.topics]
+verify_jwt = true
+
+# agent is the conversational door and is called from the browser with the user's session
+# JWT. The handler also resolves the user itself with requireUser(), because the tool
+# registry needs the id to scope every read.
+[functions.agent]
+verify_jwt = true
+
+# plan-day is cron-only and authenticates with x-cron-secret, like the rest of the
+# pipeline: pg_cron -> net.http_post sends no user JWT.
+[functions.plan-day]
+verify_jwt = false

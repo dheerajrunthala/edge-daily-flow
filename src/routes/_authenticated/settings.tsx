@@ -6,6 +6,8 @@ import { AppShell, useSignOut } from "@/components/app-shell";
 import { Card, ListSkeleton, PageHeader, TagChip } from "@/components/common";
 import { IntegrationsSettings } from "@/components/integrations-settings";
 import { NotificationSettings } from "@/components/notification-settings";
+import { TopicsSettings } from "@/components/topics-settings";
+import { FeaturesSettings } from "@/components/features-settings";
 import { CategoryPicker, EmailTimes, Segmented, TimezoneSelect } from "@/components/pref-controls";
 import { ColorPicker } from "@/components/task-form";
 import {
@@ -163,11 +165,13 @@ function SettingsPage() {
                 />
               </label>
               <div className="space-y-2">
-                <Label>Topics</Label>
+                <Label>Categories</Label>
                 <CategoryPicker
                   value={prefs.categories}
                   onChange={(c) =>
-                    c.length ? upPrefs.mutate({ categories: c }) : toast("Keep at least one topic")
+                    c.length
+                      ? upPrefs.mutate({ categories: c })
+                      : toast("Keep at least one category")
                   }
                 />
               </div>
@@ -190,6 +194,12 @@ function SettingsPage() {
               />
             </Section>
             <Section
+              title="Topics you follow"
+              hint="Anything the six categories do not cover. Matched by meaning against every article we have read."
+            >
+              <TopicsSettings />
+            </Section>
+            <Section
               title="Reminders"
               hint={`Where task reminders go, and when to stay quiet. Times are in ${profile.timezone.replace(/_/g, " ")}.`}
             >
@@ -200,6 +210,9 @@ function SettingsPage() {
               hint="Use Daily Edge from Claude Code or Claude Desktop over MCP."
             >
               <IntegrationsSettings />
+            </Section>
+            <Section title="Features" hint="Turn parts of Daily Edge off. Enforced server-side.">
+              <FeaturesSettings />
             </Section>
             <Button variant="outline" className="h-11 w-full rounded-xl" onClick={signOut}>
               <LogOut /> Sign out

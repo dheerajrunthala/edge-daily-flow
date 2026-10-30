@@ -291,6 +291,91 @@ export const useCompletions = () =>
     },
   });
 
+// ----------------------------------------------------------------- insights
+
+/**
+ * Every tool call an agent made for this account since `since`.
+ *
+ * `surface` is the point of the table: it is the only record of which of the five front
+ * doors an agent came through, and the index `(user_id, surface, created_at desc)` was
+ * added for this query. Columns are named, not `*` — there is nothing else on the row a
+ * chart needs, and `token_id` identifies a credential.
+ *
+ * The cap is a backstop, not a window: the window is `since`, and 5000 calls in thirty
+ * days would be 7 an hour, every hour. Ordered descending so if it ever does bite, what
+ * survives is the recent end rather than an arbitrary slice.
+ */
+export const useToolCalls = (since: string) =>
+  useQuery({
+    queryKey: qk.toolCalls(since),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("mcp_tool_calls")
+        .select("id,surface,tool,ok,created_at")
+        .gte("created_at", since)
+        .order("created_at", { ascending: false })
+        .limit(5000);
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+
+/**
+ * This account's model calls since `since`, with their token counts.
+ *
+ * `ai_events.user_id` is nullable — ingest-news summarises the shared article pool and no
+ * user owns that work — and those rows are invisible here: the select policy is
+ * `user_id = auth.uid()` and NULL is never equal to anything. So this is spend *for this
+ * account*, which is the only spend an account can honestly be shown.
+ */
+export const useAiEvents = (since: string) =>
+  useQuery({
+    queryKey: qk.aiEvents(since),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("ai_events")
+        .select("id,kind,input_tokens,output_tokens,items_processed,created_at")
+        .gte("created_at", since)
+        .order("created_at", { ascending: false })
+        .limit(5000);
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+
+/**
+ * Three counts over the window's news_items: delivered, opened, and linked follow-ups.
+ *
+ * Counted by the database with `head: true` rather than by fetching rows and calling
+ * `.length`. A count has to be exact — the Insights page's whole claim is that each
+ * figure matches the same query run against the database — and a fetch is capped by
+ * PostgREST's `max-rows`, so a heavy month would have started under-reporting with no
+ * error anywhere. `read_at` is only written when a story's link is actually opened, so
+ * `opened` is a click and not a card that scrolled past.
+ */
+export const useNewsCounts = (since: string) =>
+  useQuery({
+    queryKey: qk.newsCounts(since),
+    queryFn: async () => {
+      const base = () =>
+        supabase
+          .from("news_items")
+          .select("id", { count: "exact", head: true })
+          .gte("created_at", since);
+      const [delivered, opened, followups] = await Promise.all([
+        base(),
+        base().not("read_at", "is", null),
+        base().not("related_item_id", "is", null),
+      ]);
+      for (const r of [delivered, opened, followups]) if (r.error) throw r.error;
+      return {
+        delivered: delivered.count ?? 0,
+        opened: opened.count ?? 0,
+        followups: followups.count ?? 0,
+      };
+    },
+  });
+
 // ---------- Mutations ----------
 
 export function useUpdateProfile() {
@@ -632,3 +717,267 @@ export const CATEGORIES = [
 ];
 
 export const TAG_COLORS = ["slate", "blue", "green", "amber", "rose", "violet", "cyan", "orange"];
+
+// ----------------------------------------------------------------- topics
+
+export type Topic = Omit<Tables<"topics">, "embedding">;
+
+/**
+ * A topic the user follows, without its vector.
+ *
+ * The embedding is excluded by naming columns rather than selecting `*`, the same
+ * discipline api_tokens needs for token_hash: a 768-float array is a few KB per row that
+ * the browser has no use for, and it would be in every topics response forever.
+ */
+const TOPIC_COLS = "id,user_id,label,enabled,weight,created_at";
+
+export function useTopics() {
+  return useQuery({
+    queryKey: qk.topics,
+    queryFn: async () => {
+      const id = await uid();
+      const { data, error } = await supabase
+        .from("topics")
+        .select(TOPIC_COLS)
+        .eq("user_id", id)
+        .order("created_at", { ascending: true });
+      if (error) throw error;
+      return (data ?? []) as Topic[];
+    },
+  });
+}
+
+export type TopicPreview = {
+  label: string;
+  days: number;
+  covered: boolean;
+  best_similarity: number;
+  matches: { title: string; source: string; category: string; similarity: number }[];
+};
+
+/**
+ * Add, preview and remove topics.
+ *
+ * Adding goes through the Edge Function because creating a topic means embedding its
+ * label and the browser never holds the Gemini key — which is also why `topics` has no
+ * insert policy. Toggling and deleting are plain RLS writes, so they stay here.
+ */
+export function useTopicActions() {
+  const qc = useQueryClient();
+  const invalidate = () => qc.invalidateQueries({ queryKey: qk.topics });
+
+  const preview = useMutation({
+    mutationFn: async (label: string) => {
+      const { data, error } = await supabase.functions.invoke("topics", {
+        body: { action: "preview", label },
+      });
+      if (error) throw new Error(readFnError(error, "Could not preview that topic"));
+      return data as TopicPreview;
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const add = useMutation({
+    mutationFn: async (label: string) => {
+      const { data, error } = await supabase.functions.invoke("topics", {
+        body: { action: "add", label },
+      });
+      if (error) throw new Error(readFnError(error, "Could not add that topic"));
+      return data as TopicPreview & { topic: Topic };
+    },
+    onSuccess: (res) => {
+      invalidate();
+      toast.success(
+        res.covered
+          ? `Following "${res.topic.label}"`
+          : `Following "${res.topic.label}" — nothing in the archive matches it yet`,
+      );
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const setEnabled = useMutation({
+    mutationFn: async ({ id, enabled }: { id: string; enabled: boolean }) => {
+      const { error } = await supabase.from("topics").update({ enabled }).eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: invalidate,
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const setWeight = useMutation({
+    mutationFn: async ({ id, weight }: { id: string; weight: number }) => {
+      const { error } = await supabase.from("topics").update({ weight }).eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: invalidate,
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const remove = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("topics").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: invalidate,
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  return { preview, add, setEnabled, setWeight, remove };
+}
+
+// ----------------------------------------------------------------- features
+
+export const FEATURES = [
+  "digest",
+  "topics",
+  "reminders",
+  "planner",
+  "chat",
+  "voice",
+  "followups",
+  "telegram",
+  "push",
+] as const;
+export type FeatureName = (typeof FEATURES)[number];
+
+/**
+ * Features default ON, except the planner.
+ *
+ * Mirrors DEFAULT_OFF in supabase/functions/_shared/features.ts, and the two must agree:
+ * the switch the user sees here and the gate the cron reads there are the same promise. If
+ * you change one, change the other — there is a test pinning the list.
+ */
+const DEFAULT_OFF: ReadonlySet<FeatureName> = new Set<FeatureName>(["planner"]);
+
+export function featureDefault(feature: FeatureName): boolean {
+  return !DEFAULT_OFF.has(feature);
+}
+
+/** Every switch, with absent rows resolved to their default. */
+export function useFeatures() {
+  return useQuery({
+    queryKey: qk.features,
+    queryFn: async () => {
+      const id = await uid();
+      const { data, error } = await supabase
+        .from("user_features")
+        .select("feature,enabled")
+        .eq("user_id", id);
+      if (error) throw error;
+      const rows = new Map((data ?? []).map((r) => [r.feature, r.enabled]));
+      return Object.fromEntries(
+        FEATURES.map((f) => [f, rows.has(f) ? !!rows.get(f) : featureDefault(f)]),
+      ) as Record<FeatureName, boolean>;
+    },
+  });
+}
+
+export function useSetFeature() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ feature, enabled }: { feature: FeatureName; enabled: boolean }) => {
+      const id = await uid();
+      // Upsert rather than update: the row only exists once the user has touched the
+      // switch, because an absent row is what "default" means.
+      const { error } = await supabase
+        .from("user_features")
+        .upsert(
+          { user_id: id, feature, enabled, updated_at: new Date().toISOString() },
+          { onConflict: "user_id,feature" },
+        );
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.features }),
+    onError: (e: Error) => toast.error(e.message),
+  });
+}
+
+/**
+ * The message inside a FunctionsHttpError, which supabase-js does not unwrap.
+ *
+ * Without this every failure from an Edge Function reads "Edge Function returned a
+ * non-2xx status code", which hides the one useful sentence the handler wrote — the daily
+ * limit, the duplicate topic, the 120-char cap.
+ */
+function readFnError(error: unknown, fallback: string): string {
+  const ctx = (error as { context?: unknown })?.context;
+  const body = (ctx as { body?: unknown })?.body;
+  if (typeof body === "string") {
+    try {
+      const parsed = JSON.parse(body) as { error?: string };
+      if (parsed.error) return parsed.error;
+    } catch {
+      /* not JSON; fall through */
+    }
+  }
+  const msg = (error as { message?: string })?.message;
+  return msg && !msg.includes("non-2xx") ? msg : fallback;
+}
+
+// ----------------------------------------------------------------- the assistant
+
+export type AgentCitation = {
+  title: string;
+  url: string;
+  source: string | null;
+  published_at: string | null;
+  via_google_news: boolean;
+};
+
+export type AgentToolCall = {
+  name: string;
+  ok: boolean;
+  error: string | null;
+  mutating: boolean;
+  duration_ms: number;
+};
+
+export type AgentReply = {
+  answer: string;
+  surface: string;
+  citations: AgentCitation[];
+  tool_calls: AgentToolCall[];
+  unverified_links: string[];
+  turns: number;
+  duration_ms: number;
+  usage: { inputTokens: number | null; outputTokens: number | null };
+  quota: { used: number; limit: number };
+};
+
+export type AgentTurn = { role: "user" | "model"; text: string };
+
+/**
+ * Ask the assistant.
+ *
+ * Not a React Query cache entry: every call is a new question with a side effect
+ * (it may create a task), so caching it would be wrong in both directions. The
+ * conversation lives in component state and is sent back each time, which is also what
+ * keeps the server stateless — the same reason the MCP server has no sessions.
+ *
+ * Any mutation the assistant performed invalidates tasks and tags, because the chat
+ * window is not the only view of them.
+ */
+export function useAsk() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { message: string; history: AgentTurn[]; surface?: string }) => {
+      const { data, error } = await supabase.functions.invoke("agent", {
+        body: {
+          message: input.message,
+          history: input.history,
+          surface: input.surface ?? "chat",
+        },
+      });
+      if (error) throw new Error(readFnError(error, "The assistant could not answer"));
+      return data as AgentReply;
+    },
+    onSuccess: (reply) => {
+      if (reply.tool_calls.some((c) => c.mutating && c.ok)) {
+        qc.invalidateQueries({ queryKey: qk.tasks });
+        qc.invalidateQueries({ queryKey: qk.tags });
+      }
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+}

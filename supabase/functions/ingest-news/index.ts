@@ -66,6 +66,18 @@ const PREFETCH_MAX_AGE = "45 minutes";
 const POOL_TZ = "Asia/Kolkata";
 /** Articles the repair pass will look at in one invocation. */
 const REPAIR_LIMIT = 50;
+/**
+ * Articles the embedding repair will do per invocation.
+ *
+ * Sized to the quota, not to the wall clock. The Gemini free tier allows **100
+ * embed_content requests per minute**, and batchEmbedContents counts each *text* as a
+ * request rather than each call — so 200 articles is 200 requests and exceeds the limit
+ * before the second batch, whatever the backoff. 90 leaves headroom for whatever else is
+ * embedding that minute (a topic being previewed, an agent search).
+ *
+ * The backlog is worked off across invocations instead: re-run until `remaining_null` is 0.
+ */
+const EMBED_REPAIR_LIMIT = 90;
 /** How far back repair scans. Older pool entries are not worth the round trip. */
 const REPAIR_SCAN_DAYS = 14;
 
@@ -108,6 +120,9 @@ async function handle(req: Request): Promise<Response> {
   const now = new Date();
   const fetchedOn = dayKey(now, POOL_TZ);
 
+  if (body.repair === "embeddings") {
+    return await repairEmbeddings(admin, body.limit ?? EMBED_REPAIR_LIMIT, started);
+  }
   if (body.repair) return await repairSummaries(admin, body.limit ?? REPAIR_LIMIT, started);
 
   const requested = body.categories ?? (await categoriesInUse(admin));
@@ -415,9 +430,103 @@ async function repairSummaries(
   });
 }
 
-async function readBody(
-  req: Request,
-): Promise<{ categories?: NewsCategory[]; repair?: boolean; limit?: number }> {
+/**
+ * Give a vector to pooled articles that never got one.
+ *
+ * These exist because embedding is allowed to fail softly: embedAll() logs a failed batch
+ * and pools the article anyway, on the reasoning that a story without follow-up linking is
+ * better than no story. That reasoning is right, but the consequence was not thought
+ * through — upsertArticles uses ignoreDuplicates on a unique url, so an article pooled
+ * without a vector is skipped on every subsequent run and stays vectorless **forever**. It
+ * is invisible to topic matching and to follow-up linking for as long as it is in the pool.
+ *
+ * On 2026-10-28 that was 797 of 2,651 articles, going back to 2026-10-13 — 30% of the
+ * archive, which is 30% of what every topic query can possibly match.
+ *
+ * Unlike the summary repair this makes no judgement about which rows deserve attention: a
+ * null embedding is unambiguous. It also deliberately does not re-summarize, so the two
+ * passes stay independent and either can be re-run alone. Safe to re-run; `limit` exists so
+ * a backlog can be worked off across several invocations without risking the wall clock.
+ */
+async function repairEmbeddings(
+  admin: SupabaseClient,
+  limit: number,
+  started: number,
+): Promise<Response> {
+  const { data, error } = await admin
+    .from("articles")
+    .select("id, title, summary")
+    .is("embedding", null)
+    // Oldest first, so repeated runs make monotonic progress through the backlog rather
+    // than re-reading whatever happens to sort first.
+    .order("fetched_on", { ascending: true })
+    .limit(Math.max(1, Math.min(limit, 500)));
+  if (error) throw error;
+
+  const rows = (data ?? []) as { id: string; title: string; summary: string | null }[];
+  if (rows.length === 0) {
+    return json({ ok: true, repaired: 0, note: "every pooled article already has a vector" });
+  }
+
+  // The same text shape ingest uses for a fresh article, so a repaired vector sits in the
+  // same space as one embedded on the day. Getting this wrong would be invisible — the
+  // vectors would simply be subtly worse neighbours.
+  const texts = rows.map((r) => `${r.title}\n\n${r.summary ?? ""}`.trim());
+  const { vectors, calls } = await embedAll(texts);
+
+  let repaired = 0;
+  let stillMissing = 0;
+  for (const [i, row] of rows.entries()) {
+    const vector = vectors[i];
+    if (!vector) {
+      stillMissing++;
+      continue;
+    }
+    const { error: updateError } = await admin
+      .from("articles")
+      .update({ embedding: vector })
+      .eq("id", row.id);
+    if (updateError) {
+      console.error(`embedding repair failed for ${row.id}`, updateError.message);
+      stillMissing++;
+      continue;
+    }
+    repaired++;
+  }
+
+  if (repaired > 0) {
+    await logAiEvent(admin, {
+      userId: null,
+      kind: "embedding",
+      itemsProcessed: repaired,
+    });
+  }
+
+  const { count: remaining } = await admin
+    .from("articles")
+    .select("id", { count: "exact", head: true })
+    .is("embedding", null);
+
+  const runtime_ms = Date.now() - started;
+  console.log(
+    `embedding repair: ${repaired}/${rows.length} in ${runtime_ms}ms, ${remaining ?? "?"} still null`,
+  );
+  return json({
+    ok: true,
+    repaired,
+    attempted: rows.length,
+    still_missing_in_batch: stillMissing,
+    remaining_null: remaining ?? null,
+    gemini_calls: calls,
+    runtime_ms,
+  });
+}
+
+async function readBody(req: Request): Promise<{
+  categories?: NewsCategory[];
+  repair?: true | "embeddings";
+  limit?: number;
+}> {
   try {
     const raw = (await req.json()) as {
       category?: unknown;
@@ -425,9 +534,14 @@ async function readBody(
       repair?: unknown;
       limit?: unknown;
     };
-    if (raw?.repair === true) {
+    // `true` still means the summary repair, so every existing caller and every note in
+    // CLAUDE.md keeps working; "embeddings" is the new pass.
+    if (raw?.repair === true || raw?.repair === "embeddings") {
       const limit = Number(raw.limit);
-      return { repair: true, limit: Number.isFinite(limit) ? limit : undefined };
+      return {
+        repair: raw.repair === "embeddings" ? "embeddings" : true,
+        limit: Number.isFinite(limit) ? limit : undefined,
+      };
     }
     // `category` is what fanout_ingest_news() sends; `categories` is for manual runs.
     if (isNewsCategory(raw?.category)) return { categories: [raw.category] };

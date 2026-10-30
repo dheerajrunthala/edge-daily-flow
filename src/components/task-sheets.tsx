@@ -1,8 +1,11 @@
 import { useState } from "react";
-import { Check, Clock, Pencil, RotateCcw, Trash2 } from "lucide-react";
+import { Check, Clock, Pencil, Repeat, RotateCcw, Trash2, Calendar } from "lucide-react";
 import { snoozeOptions } from "@/lib/task-actions";
 import type { Task } from "@/lib/task-logic";
 import { absoluteDue, dayKey, fromKeys } from "@/lib/tz";
+import { downloadTaskAsIcs, googleCalendarUrl } from "@/lib/calendar";
+import type { Tag } from "@/lib/queries";
+import { TagChip } from "./common";
 import { ResponsiveModal } from "./responsive-modal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -125,6 +128,9 @@ export function TaskMenuSheet({
       : { label: "Complete", icon: Check, run: run(onToggle) },
     { label: "Edit", icon: Pencil, run: run(onEdit) },
     ...(done ? [] : [{ label: "Snooze…", icon: Clock, run: run(onSnooze) }]),
+    ...(task?.due_at
+      ? [{ label: "Add to calendar", icon: Calendar, run: run((t) => downloadTaskAsIcs(t, tz)) }]
+      : []),
   ];
 
   return (
@@ -154,6 +160,109 @@ export function TaskMenuSheet({
               className="flex min-h-12 w-full items-center gap-3 rounded-xl border border-border px-4 text-left text-sm text-destructive transition-calm hover:bg-destructive/10"
             >
               <Trash2 className="size-4" /> Delete
+            </button>
+          </div>
+        </div>
+      )}
+    </ResponsiveModal>
+  );
+}
+
+/**
+ * What a row's tap opens: a read-only view of everything the row has no room for (full
+ * title, full notes, every tag), with Edit as the only door into the edit form.
+ */
+export function TaskDetailSheet({
+  task,
+  tz,
+  tags,
+  onClose,
+  onToggle,
+  onEdit,
+}: {
+  task: Task | null;
+  tz: string;
+  tags: Tag[];
+  onClose: () => void;
+  onToggle: (t: Task) => void;
+  onEdit: (t: Task) => void;
+}) {
+  const done = task?.status === "done";
+  const color = (n: string) => tags.find((t) => t.name === n)?.color;
+
+  return (
+    <ResponsiveModal open={!!task} onOpenChange={(o) => !o && onClose()} title="Task">
+      {task && (
+        <div className="space-y-4">
+          <div>
+            <p className="text-base font-medium">{task.title}</p>
+            {task.due_at && (
+              <p className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground">
+                {absoluteDue(task.due_at, tz, task.all_day)}
+                {task.recurrence !== "none" && (
+                  <span className="inline-flex items-center gap-0.5">
+                    <Repeat className="size-3" /> {task.recurrence}
+                  </span>
+                )}
+              </p>
+            )}
+          </div>
+
+          {task.notes && (
+            <p className="whitespace-pre-wrap text-sm text-muted-foreground">{task.notes}</p>
+          )}
+
+          {task.tags.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {task.tags.map((t) => (
+                <TagChip key={t} name={t} color={color(t)} />
+              ))}
+            </div>
+          )}
+
+          <div className="space-y-2 pt-2">
+            <button
+              onClick={() => {
+                onToggle(task);
+                onClose();
+              }}
+              className="flex min-h-12 w-full items-center gap-3 rounded-xl border border-border px-4 text-left text-sm transition-calm hover:bg-accent"
+            >
+              {done ? (
+                <>
+                  <RotateCcw className="size-4 text-muted-foreground" /> Mark as not done
+                </>
+              ) : (
+                <>
+                  <Check className="size-4 text-muted-foreground" /> Mark as done
+                </>
+              )}
+            </button>
+
+            {task.due_at && (
+              <>
+                <a
+                  href={googleCalendarUrl(task, tz)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex min-h-12 w-full items-center gap-3 rounded-xl border border-border px-4 text-left text-sm transition-calm hover:bg-accent"
+                >
+                  <Calendar className="size-4 text-muted-foreground" /> Add to Google Calendar
+                </a>
+                <button
+                  onClick={() => downloadTaskAsIcs(task, tz)}
+                  className="flex min-h-12 w-full items-center gap-3 rounded-xl border border-border px-4 text-left text-sm transition-calm hover:bg-accent"
+                >
+                  <Calendar className="size-4 text-muted-foreground" /> Download .ics
+                </button>
+              </>
+            )}
+
+            <button
+              onClick={() => onEdit(task)}
+              className="flex min-h-12 w-full items-center gap-3 rounded-xl border border-border px-4 text-left text-sm transition-calm hover:bg-accent"
+            >
+              <Pencil className="size-4 text-muted-foreground" /> Edit
             </button>
           </div>
         </div>
