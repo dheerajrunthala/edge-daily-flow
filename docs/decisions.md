@@ -79,6 +79,28 @@ those characters are syntax: "fix(auth), part 2" would otherwise parse as extra 
 **Rescheduling deletes the old occurrence's ledger rows.** Without that, rescheduling _back_ to
 an already-notified time would find every stage claimed and send nothing at all.
 
+**Every figure on Insights traces to a row, over one stated window.** The page shipped with
+`MIN_PER_ARTICLE = 3` — articles scanned times three minutes, presented as "reading time
+saved". It was deleted rather than refined: there is no measurement behind any value of that
+constant, and a page whose entire job is to show real numbers cannot carry one that no query
+could reproduce. Two rules fell out of it. **One window for the whole page** (30 days, named in
+the subtitle) because a tile counting all time beside a chart counting a month invites exactly
+the comparison that is wrong, and because it keeps every query bounded. And **a count is
+counted by the database** — `useNewsCounts` asks PostgREST for `count: "exact", head: true`
+rather than fetching rows and taking `.length`, which would silently under-report as soon as a
+month of items passed the `max-rows` cap. Aggregation lives in `src/lib/insights.ts` as pure
+functions over rows, so "the number matches the database" is a test and not a claim.
+
+**Chart colour is validated, not chosen.** `--viz-1…5` in `styles.css` are five fixed
+categorical slots, one per `mcp_tool_calls.surface`, with their own dark steps — not the light
+values reused, which is how `--chart-3` (OKLCH L 0.398) came to be invisible on the dark card.
+The order is fixed so a surface keeps its colour on a day it made no calls. Both sets were run
+through the `dataviz` skill's validator against the real card colours (`#ffffff`, `#111114`):
+worst adjacent CVD ΔE 9.1 light / 8.4 dark against a floor of 8. Three light slots fall under
+3:1 contrast, which is why every legend states its own count instead of leaving identity to the
+hue. Input vs output tokens are two steps of _one_ hue, because they are two parts of one
+measure and not two categories.
+
 ---
 
 ## Reliability
@@ -109,9 +131,13 @@ pins with `supabase secrets set` after checking ListModels; a bad value is one s
 reverting.
 
 **A repair job must not cause the damage it repairs.** The embedding repair runs at
-`:07/:17/:27/…` and shares a minute with no other job. `*/10` would have fired at 01:00 UTC
-alongside six parallel ingest invocations all embedding, and the articles that lost the quota
-race would have been _fresh_ ones — pooled vectorless and therefore permanent.
+`:07/:17/:27/…` and shares a minute with no other job **that spends Gemini quota**. `*/10`
+would have fired at 01:00 UTC alongside six parallel ingest invocations all embedding, and the
+articles that lost the quota race would have been _fresh_ ones — pooled vectorless and
+therefore permanent. `check-reminders` is the one job it does share a minute with, because
+that one runs every minute and so shares a minute with everything; it makes no Gemini call.
+Asserted in `scripts/db-checks.sql`, which names that exemption rather than implying there
+is none.
 
 ---
 
@@ -132,6 +158,15 @@ the URL to open and the URL to post a button press to.
 
 **A third notification action button.** Chrome renders at most two and silently drops the rest,
 so "Tomorrow" stays a Telegram and in-app affordance.
+
+**Topic coverage as an Insights figure.** "How many of today's items arrived via a topic rather
+than a category" has no row that records it: nothing on `news_items` marks provenance, and
+`match_topics_pool` returns _articles_ matching today's topics at today's thresholds, not the
+pool that was actually ranked when the digest was built. Re-running it from the browser and
+matching back by URL would answer a slightly different question with a vector query per topic,
+and 768 floats per row crossing the wire. Skipped outright rather than approximated. It becomes
+cheap the day a digest stores which topic pulled each item in — that is the change to make
+first, not a clever query.
 
 **An in-function reconciler for stuck digests.** The retry is a property of the _schedule_, not
 of the function. Expressing it as a second cron entry means there is no new branch to get

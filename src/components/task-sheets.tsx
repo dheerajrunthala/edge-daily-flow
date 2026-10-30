@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { Check, Clock, Pencil, RotateCcw, Trash2 } from "lucide-react";
+import { Check, Clock, Pencil, RotateCcw, Trash2, Calendar } from "lucide-react";
 import { snoozeOptions } from "@/lib/task-actions";
 import type { Task } from "@/lib/task-logic";
 import { absoluteDue, dayKey, fromKeys } from "@/lib/tz";
+import { downloadTaskAsIcs } from "@/lib/calendar";
 import { ResponsiveModal } from "./responsive-modal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -125,6 +126,9 @@ export function TaskMenuSheet({
       : { label: "Complete", icon: Check, run: run(onToggle) },
     { label: "Edit", icon: Pencil, run: run(onEdit) },
     ...(done ? [] : [{ label: "Snooze…", icon: Clock, run: run(onSnooze) }]),
+    ...(task?.due_at
+      ? [{ label: "Add to calendar", icon: Calendar, run: run((t) => downloadTaskAsIcs(t, tz)) }]
+      : []),
   ];
 
   return (

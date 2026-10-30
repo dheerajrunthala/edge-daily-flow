@@ -18,4 +18,10 @@ export const qk = {
   notificationActions: ["notification_actions"] as const,
   topics: ["topics"] as const,
   features: ["user_features"] as const,
+  // Insights. The window start is part of the key: it changes at local midnight, which
+  // is exactly when the figures mean something different and the cache should miss.
+  // `newsCounts` sits under "news_items" so marking a story read invalidates it too.
+  toolCalls: (since: string) => ["mcp_tool_calls", since] as const,
+  aiEvents: (since: string) => ["ai_events", since] as const,
+  newsCounts: (since: string) => ["news_items", "counts", since] as const,
 };

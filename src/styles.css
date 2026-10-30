@@ -89,6 +89,25 @@
   --chart-3: oklch(0.398 0.07 227.392);
   --chart-4: oklch(0.828 0.189 84.429);
   --chart-5: oklch(0.769 0.188 70.08);
+  /* Chart series, light. Five categorical slots because mcp_tool_calls.surface has five
+     values, in a fixed order so a surface keeps its colour on a day it made no calls.
+     --viz-1 is the brand violet (= --primary); slots 2-5 are hex, not oklch, because
+     these exact values are what the colourblind-safety validator was run on and a
+     round-trip through another colour space would move the ΔE it measured. Worst
+     adjacent pair: CVD ΔE 9.1, normal-vision ΔE 19.6, both above the gate of 8. Slots
+     3-5 sit under 3:1 against this card, so every chart using them carries visible
+     labels (the legend states each count). --viz-in/--viz-out are two steps of one hue,
+     for input vs output tokens: same measure, two parts, so not two categories.
+     Re-run after any change: dataviz skill, scripts/validate_palette.js, surface
+     #ffffff here and #111114 in .dark. */
+  --viz-1: var(--primary);
+  --viz-2: #eb6834;
+  --viz-3: #1baf7a;
+  --viz-4: #eda100;
+  --viz-5: #e87ba4;
+  --viz-other: var(--muted-foreground);
+  --viz-in: #4f39f6;
+  --viz-out: #8792ff;
   --sidebar: oklch(0.975 0.001 286.375);
   --sidebar-foreground: oklch(0.21 0.006 285.885);
   --sidebar-primary: oklch(0.511 0.262 276.966);
@@ -129,6 +148,16 @@
   --overdue-soft: oklch(0.645 0.246 16.439 / 0.12);
   --success: oklch(0.72 0.15 155);
   --warn: oklch(0.78 0.15 75);
+  /* Chart series, dark. The same five hues re-stepped for the dark card, not the light
+     values flipped: every slot clears 3:1 against #111114 and the set was validated as
+     a set (worst adjacent CVD ΔE 8.4, normal-vision 19.3). --viz-1 follows --primary,
+     and --viz-other follows --muted-foreground. */
+  --viz-2: #d95926;
+  --viz-3: #199e70;
+  --viz-4: #c98500;
+  --viz-5: #d55181;
+  --viz-in: #8792ff;
+  --viz-out: #5957ed;
   --sidebar: oklch(0.16 0.006 285.8);
   --sidebar-foreground: oklch(0.96 0.002 286);
   --sidebar-primary: oklch(0.673 0.182 276.935);
