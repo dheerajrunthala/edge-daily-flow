@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState, type ReactNode } from "react";
-import { Loader2, LogOut, Monitor, Moon, Sun, Trash2 } from "lucide-react";
+import { Loader2, LogOut, Monitor, Moon, Plus, Sun, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell, useSignOut } from "@/components/app-shell";
 import { Card, ListSkeleton, PageHeader, TagChip } from "@/components/common";
@@ -11,6 +11,7 @@ import { FeaturesSettings } from "@/components/features-settings";
 import { CategoryPicker, EmailTimes, Segmented, TimezoneSelect } from "@/components/pref-controls";
 import { ColorPicker } from "@/components/task-form";
 import {
+  TAG_COLORS,
   usePrefs,
   useProfile,
   useTagMutations,
@@ -228,15 +229,77 @@ function TagManager() {
   const { data: tags, isLoading } = useTags();
   if (isLoading) return <ListSkeleton rows={3} />;
   return (
-    <div className="divide-y divide-border">
-      {tags?.map((t) => (
-        <TagRow key={t.id} tag={t} />
-      ))}
-      {!tags?.length && (
-        <p className="text-sm text-muted-foreground">
-          No tags yet. Create them while adding a task.
-        </p>
-      )}
+    <div className="space-y-3">
+      <div className="divide-y divide-border">
+        {tags?.map((t) => (
+          <TagRow key={t.id} tag={t} />
+        ))}
+        {!tags?.length && (
+          <p className="text-sm text-muted-foreground">
+            No tags yet. Create one below, or while adding a task.
+          </p>
+        )}
+      </div>
+      <AddTagRow existing={tags ?? []} />
+    </div>
+  );
+}
+
+/**
+ * The "while adding a task" path has always let you type a new tag name; this is the same
+ * `create` mutation, just reachable from Settings too. The duplicate-name check here is a
+ * client-side guard against the one error worth a dedicated message — `tags_user_id_name_key`
+ * — rather than letting the raw constraint violation reach the generic toast.
+ */
+function AddTagRow({ existing }: { existing: Tag[] }) {
+  const { create } = useTagMutations();
+  const [name, setName] = useState("");
+  const [color, setColor] = useState<string>(TAG_COLORS[0]);
+
+  const submit = () => {
+    const n = name.trim();
+    if (!n || create.isPending) return;
+    if (existing.some((t) => t.name === n)) {
+      toast.error(`A tag named "${n}" already exists`);
+      return;
+    }
+    create.mutate({ name: n, color }, { onSuccess: () => setName("") });
+  };
+
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-dashed border-border p-3 sm:flex-row sm:items-center">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label="Pick a color"
+              className="flex size-9 shrink-0 items-center justify-center rounded-full"
+            >
+              <TagChip name="" color={color} className="size-5 p-0" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="w-auto p-3">
+            <ColorPicker value={color} onChange={setColor} />
+          </PopoverContent>
+        </Popover>
+        <Input
+          value={name}
+          placeholder="New tag name"
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          className="h-10 flex-1 rounded-lg"
+        />
+      </div>
+      <Button
+        variant="outline"
+        size="sm"
+        className="rounded-lg sm:shrink-0"
+        disabled={!name.trim() || create.isPending}
+        onClick={submit}
+      >
+        {create.isPending ? <Loader2 className="animate-spin" /> : <Plus />} Add tag
+      </Button>
     </div>
   );
 }
