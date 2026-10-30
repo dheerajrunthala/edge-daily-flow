@@ -43,3 +43,41 @@ Feed-specific gotchas live in [news-pipeline.md](news-pipeline.md).
   returns empty strings, which looks exactly like a function that logged nothing. And run
   `select now()` before choosing a window: one guessed from local time is hours off and
   returns nothing, which also looks like silence.
+
+## `revoke execute ... from anon` does not close a function
+
+Postgres grants EXECUTE on every new function to **PUBLIC**, and `anon` inherits that. So
+revoking from `anon` by name leaves the PUBLIC grant intact and the function still reachable
+over PostgREST with nothing but the publishable key.
+
+This was live. Three vector RPCs and one _write_ were open to anonymous callers while the
+migration comments claimed otherwise — and `match_news_items` resolves its owner as
+`coalesce(auth.uid(), p_user_id)`, so with no JWT an anonymous caller passing someone else's
+user id read that user's news items. The coalesce was written assuming the revoke made the
+null branch unreachable; it did not.
+
+Always revoke from **both**:
+
+```sql
+revoke execute on function public.f(args) from public, anon;
+```
+
+And verify with the advisor rather than the migration comment:
+
+```
+mcp__supabase__get_advisors(type: "security")
+```
+
+```sql
+-- the standing check
+select p.proname,
+  has_function_privilege('anon', p.oid, 'EXECUTE') as anon
+from pg_proc p
+where p.pronamespace = 'public'::regnamespace and p.prosecdef
+order by anon desc;
+```
+
+`handle_new_user` is the one acceptable `anon = true`: it returns `trigger`, and Postgres
+refuses a direct call ("trigger functions can only be called as triggers") — verified on this
+project. It is left alone rather than revoked, because nothing is reachable and the signup
+trigger is not worth risking.
