@@ -411,17 +411,59 @@ same one, and it answers 503 "high demand" often enough to have lost three days 
   Verified: plan-day's successful run was answered by the fallback.
 - **Per-call deadline (25s) and a total budget (90s).** An unbounded fetch inside a 150s
   runtime is not a long wait, it is a lost error.
-- `embedBatch` gets the same policy. On 2026-10-28 ingest pooled 138 articles and embedded
-  only 99 — and an article with no vector is invisible to topic matching and follow-up
-  linking _forever_, because articles are upserted with `ignoreDuplicates` on a unique url.
+- `embedBatch` gets the same policy, **plus the quota rule below**, which is the one that
+  actually mattered.
 
-### Known structural gap
+### The embedding quota is the binding constraint, not capacity
 
-`build-digests` iterates users in one invocation with no per-user time budget, so one slow
-user starves the rest. On 2026-10-28 a leftover QA account spent 140s on Gemini retries and
-the real user's digest row was claimed at 01:32:21 and killed at 01:32:33 — which is why it
-sat in `pending` and never reached `failed`: nothing survived to write a status.
-`ingest-news` solved this with `fanout_ingest_news()`; build-digests has no equivalent yet.
+This looked like capacity flakiness for two weeks and was not. The Gemini **free tier allows
+100 `embed_content` requests per minute**, and `batchEmbedContents` counts each _text_ as a
+request rather than each call. So:
+
+- a day's pool is 130–150 articles across six categories that `fanout_ingest_news()` starts
+  **simultaneously** — comfortably over the limit, every morning;
+- exponential backoff cannot fix a per-minute quota. 1+2+4+8s is 15 seconds of patience for a
+  window the API itself says will reset in up to 60.
+
+Three consequences, all now handled:
+
+1. **Believe the API.** A quota 429 carries the wait in `RetryInfo.retryDelay` and in prose
+   ("Please retry in 49.215166941s"). `retryAfterMs()` parses either and honours it, capped at
+   55s so an unbounded wait cannot eat the 150s runtime. Guessing was the bug.
+2. **Size work to the quota, not the wall clock.** `EMBED_REPAIR_LIMIT = 90`, not 200. Proof
+   it is the right shape: a run asked to repair 200 repaired **exactly 100** and was refused
+   the rest.
+3. **A lost vector must not be permanent.** Articles are upserted with `ignoreDuplicates` on a
+   unique url, so an article pooled without a vector was skipped by every later run and stayed
+   vectorless forever — invisible to topic matching and follow-up linking. That had reached
+   **797 of 2,651 articles (30% of the archive)**, going back to 2026-10-13. The
+   `repair-embeddings` cron (`*/10`, 90 per run) clears a backlog at 540/hour and then costs
+   one indexed query returning nothing. That is what makes "pooled without a vector" a
+   recoverable state rather than a permanent one.
+
+### The structural gap, and how it was closed
+
+`build-digests` used to iterate users inside one invocation with no per-user time budget, so
+the slowest user decided whether anybody else got a digest. On 2026-10-28 a leftover QA
+account spent 140s on Gemini retries and the real user's row was claimed at 01:32:21 and
+killed at 01:32:33 — which is why it sat in `pending` and never reached `failed`: nothing
+survived to write a status.
+
+`fanout_build_digests()` fixes it the way `fanout_ingest_news()` fixed the other half — one
+`net.http_post` per user, each with its own 150s budget. It accepts the same tradeoff: every
+user's ranking call now goes out at once rather than in sequence, which the retry policy and
+the fallback model are what make survivable.
+
+Two things that were _also_ wrong and are easy to miss:
+
+- **A dead run had nothing to retry it.** Cron fired once at 01:30, so a killed invocation
+  left a `pending` row that no later run could reach — the next day's run builds the next
+  day's digest. `build-digests-retry` at 03:00 calls the same fan-out, which costs nothing for
+  a digest already `ready` (`buildForUser` returns early before spending) and is a real retry
+  for one that is not. Verified: a fan-out over a `ready` digest added zero Gemini calls.
+- **`plan-day` was never scheduled at all.** It was written, deployed, documented in the cron
+  table above and verified end to end by hand — and then given no `cron.job` row, so the
+  autonomous planner had only ever run when somebody invoked it manually. Scheduled now.
 
 ## Vector retrieval (Phase 8)
 
@@ -662,14 +704,16 @@ pooled 68 aggregator-tier articles of which 54 carry `url_resolved = false`.
 
 ## Cron (UTC)
 
-| when           | job                         | what                                                                |
-| -------------- | --------------------------- | ------------------------------------------------------------------- |
-| `50 0 * * *`   | `prefetch-aggregator-feeds` | pg_net fetches the aggregator tier                                  |
-| `0 1 * * *`    | `fanout-ingest-news`        | `fanout_ingest_news()` → one ingest-news call per followed category |
-| `30 1 * * *`   | `build-digests`             | one Gemini call per user over the shared pool                       |
-| `*/15 * * * *` | `send-briefs`               | emails whoever's `email_time` falls in this window                  |
-| `* * * * *`    | `check-reminders`           | the task escalation ladder (see Notifications)                      |
-| `*/15 * * * *` | `plan-day`                  | the morning plan, for users whose `morning_time` is in the window   |
+| when           | job                         | what                                                                 |
+| -------------- | --------------------------- | -------------------------------------------------------------------- |
+| `50 0 * * *`   | `prefetch-aggregator-feeds` | pg_net fetches the aggregator tier                                   |
+| `0 1 * * *`    | `fanout-ingest-news`        | `fanout_ingest_news()` → one ingest-news call per followed category  |
+| `30 1 * * *`   | `build-digests`             | `fanout_build_digests()` → one invocation **per user** over the pool |
+| `*/15 * * * *` | `send-briefs`               | emails whoever's `email_time` falls in this window                   |
+| `* * * * *`    | `check-reminders`           | the task escalation ladder (see Notifications)                       |
+| `*/15 * * * *` | `plan-day`                  | the morning plan, for users whose `morning_time` is in the window    |
+| `0 3 * * *`    | `build-digests-retry`       | the same fan-out again; a no-op for any digest already `ready`       |
+| `*/10 * * * *` | `repair-embeddings`         | 90 vectorless pooled articles per run, so a lost vector self-heals   |
 
 Defined in `20261012072101_cron_schedules.sql`; `check-reminders` was moved to every
 minute by `20261012090000_notifications.sql`. `invoke_edge_function(name, body)` reads
@@ -822,6 +866,12 @@ ranking prompt:
 - **A missing export is a boot failure, not a type error.** `import { X }` where the module
   does not export `X` makes the isolate refuse to start, and pg_net sees
   `{"code":"BOOT_ERROR"}` with nothing in the function logs.
+- **Touching `Deno` at module load makes a module untestable.** Reading `Deno.env` in a
+  top-level const in `gemini.ts` made every test file that transitively imports it fail to
+  _collect_ — the suite reported 106 passing instead of 118, with no failure naming the twelve
+  that vanished. A silent drop is worse than a red test, so the env read is guarded with
+  `typeof Deno !== "undefined"` and `gemini.test.ts` now imports the module as its own
+  cheapest possible regression guard.
 - **An unbounded `fetch` loses the error.** The wall clock is 150s; a hung upstream call means
   the platform kills the invocation with `IDLE_TIMEOUT` and nothing that was going to be
   logged ever is. Every Gemini call carries its own deadline for this reason — keep that true
@@ -908,8 +958,31 @@ and revoke MCP tokens, with copy-paste setup for Claude Code and Claude Desktop.
       **Not yet exercised:** the `agent` function's happy path from a browser session (a user
       JWT cannot be minted from a Claude Code session — the owner must try `/ask`), dictation
       on a real microphone, and the `voice` and `telegram` surfaces of the registry.
-- [ ] Phase 9 (optional): weekly review email, X highlights, Google Calendar, an Alexa skill
-      on the same agent, and a per-user time budget for `build-digests`.
+- [ ] Phase 9: **submission hardening.** Delivers: the process layer as committed skills
+      (`start-phase`, `write-tests`, `ship-change`), `fanout_build_digests()` so one slow user
+      cannot starve the rest, a reconciler for digests left `pending` by a killed isolate, an
+      embedding repair pass, pinned Gemini model versions, the manual verification of Phase 8
+      codified as runnable scripts, a real Insights page, an `.ics` "add to calendar" export,
+      and the submission documents under `docs/`.
+      **Exit criteria:** `npm run build && lint && test` green; `scripts/db-checks.sql` passes;
+      every Edge Function boots; a `ready` digest produced through `fanout_build_digests()`;
+      `count(*) where embedding is null` falling.
+      **Found on entry:** the embedding gap had _widened_ since Phase 8 (797 of 2,651 missing,
+      oldest 2026-10-13) because `_shared/gemini.ts` changed but only five of the **seven**
+      functions bundling it were redeployed — `ingest-news`, `parse-task` and
+      `telegram-webhook` were still running the three-attempt retry with no fallback. Exactly
+      the rule `ship-change` step 4 exists to enforce, missed in the session that wrote it.
+      Chasing it then found the actual cause, which was never capacity: the free tier caps
+      `embed_content` at **100 requests/minute** and `batchEmbedContents` counts each text,
+      so no retry policy could have fixed it. Also found: `plan-day` had no cron row at all,
+      and three `pending` digests were unreachable by any future run.
+      **Will remain unverified:** the `agent` happy path from a browser session (a user JWT
+      cannot be minted outside one — **owner-assigned**), dictation on a real microphone, the
+      `voice` and `telegram` registry surfaces, and the web-push action buttons.
+- [ ] Phase 10 (optional): OAuth2 authorization-code endpoint — which unlocks both Alexa
+      account linking and ChatGPT as an MCP client — Google Calendar two-way sync so the
+      planner can see when you are free, WhatsApp, the weekly review email, Telegram free text
+      through the agent, and Playwright E2E.
 
 ## Working conventions
 
