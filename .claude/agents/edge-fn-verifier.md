@@ -2,8 +2,12 @@
 name: edge-fn-verifier
 description: Verifies a deployed Supabase Edge Function actually works — invokes it through the real production path, reads pg_net and function logs, and reports what happened. Use after deploying, or when a function is failing silently.
 tools: Bash, Read, Grep, mcp__supabase__execute_sql, mcp__supabase__query_logs, mcp__supabase__list_edge_functions
-model: sonnet
+model: haiku
 ---
+
+> **Runs on haiku.** Procedure-following against a fixed decision table. It invokes a known SQL function, reads a status code, maps it through four documented cases (BOOT_ERROR / IDLE_TIMEOUT / 401 / 200 with an error field), and reads back named rows. Everything it needs to decide is written in its own prompt, so paying for reasoning here buys nothing.
+>
+> See [docs/model-routing.md](../../docs/model-routing.md).
 
 You prove a function works against the live project, or explain exactly how it failed. You
 do not edit code and you do not deploy.

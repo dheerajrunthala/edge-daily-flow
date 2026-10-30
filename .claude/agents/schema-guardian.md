@@ -5,6 +5,10 @@ tools: Read, Grep, Glob, Bash, mcp__supabase__execute_sql, mcp__supabase__list_t
 model: sonnet
 ---
 
+> **Runs on sonnet.** Judgement over a short, high-consequence artifact. A migration is at most a few hundred lines, so the context is cheap, but a missed RLS hole or an over-broad UPDATE reaches real users' data — and this agent has already blocked a migration that would have caused the damage it was meant to prevent. Opus would not read SQL better; haiku would not reliably notice that a WHERE clause matches two rows when it should match one.
+>
+> See [docs/model-routing.md](../../docs/model-routing.md).
+
 You review one migration against a production database holding real users' data. You do
 not edit files and you do not apply anything. You report findings, most severe first, and
 say plainly when a migration is fine.

@@ -1,59 +1,144 @@
-# Edge Daily Flow
+# Daily Edge
 
-Build "Daily Edge" — an AI-powered productivity + news app open to anyone who signs up. My Supabase project is connected and ALL TABLES ALREADY EXIST. Do NOT create, alter, or migrate any tables, and do not create edge functions. Use the generated Supabase types and only read/write the existing tables. A database trigger already creates each new user's profiles row, news_prefs row, and 6 default tags on signup.
+**Your day, run by an agent you can reach from anywhere.**
 
-## Design direction
-Calm, premium, focused — Linear meets Things 3, with an editorial news section.
-- Fonts: "Inter" for UI; "Newsreader" (serif) for news headlines and the daily summary.
-- Palette: neutral zinc base with a single indigo accent, used for primary actions and anything AI-generated. AI content gets a small sparkle icon and a soft indigo gradient border.
-- Light and dark mode: follow the system, with a manual toggle. Dark background is near-black (#0B0B0F).
-- Tag chips use the color token in tags.color (slate, blue, green, amber, rose, violet, cyan, orange) as a soft tinted background with matching text, readable in both themes.
-- Generous whitespace, 12–16px radius cards, hairline borders, minimal shadows, 150–200ms transitions. Skeleton loaders for all data, and friendly empty states (icon + one-line hint).
-- Fully responsive:
-  - Desktop (≥1024px): collapsible left sidebar, content max-width ~1100px, two-column brief.
-  - Mobile: bottom tab bar (Brief, Tasks, News, Insights, Settings), single-column cards, a floating "+" button for new tasks, bottom sheets instead of dialogs, 44px minimum touch targets.
-- Installable PWA (manifest, icons, standalone display, theme color).
+A personal task manager and AI-curated daily news brief — live at
+**https://dailyedgeapp.lovable.app** with real users and seventeen days of production cron runs.
 
-## Public pages
-- Landing (/), shown when logged out: a hero line "Your day, distilled by AI." with a short subline about AI-organized tasks and a personalized daily news brief in your inbox. Three feature cards (Natural-language tasks, Daily AI news digest, Morning email brief), a stylized product preview mock, and a "Get started" CTA. Logged-in users are redirected to /brief.
-- Login (/login): email magic link on a clean centered card, with a "check your inbox" state.
+Every productivity tool assumes you come to it. Daily Edge inverts that: one agent, one tool
+registry, reachable from the web app, a Telegram bot, desktop notifications, **any MCP client
+you already have open**, and from nobody at all — it runs your morning on a schedule.
 
-## Onboarding (/onboarding)
-Shown after login when profiles.onboarded_at is null. A 3-step flow with a progress indicator:
-1. Name + timezone (auto-detect from the browser, editable searchable select) → profiles.full_name, profiles.timezone.
-2. Interests: news categories as selectable cards (AI, Software Development, Indian Stock Market, Indian Startups & Tech, Global Tech, Policy & Regulation), a headline count 10/20/30 segmented control, and an "About you" textarea → news_prefs.categories, news_prefs.headline_count, profiles.news_profile. Prefill the textarea with an example: "Software engineer in India interested in AI, backend, and markets".
-3. Email brief times (default 08:00 and 10:00, add/remove times, shown in the user's timezone) → news_prefs.email_times.
-On finish, set profiles.onboarded_at = now() and go to /brief.
+---
 
-## App pages (authenticated)
-1. Brief (/brief): greeting with name and today's date in the user's timezone. A "Today at a glance" card with the latest digests.summary in serif. Sections: Today's tasks, Overdue (rose accent), Birthdays in the next 7 days (tasks tagged "Birthday"), Top 5 headlines from the latest digest.
-2. Tasks (/tasks): List and Calendar (month) views. Group the list as Overdue / Today / Upcoming / Someday (no due date). Filter by tag and status. Checking a task: if recurrence = 'none', set status 'done' and completed_at; if recurring, insert into task_completions (with the occurrence's due_at) and move due_at to the next occurrence. Create/edit in a dialog (bottom sheet on mobile) with title, notes, due date + time or all-day, recurrence, priority, tags (multi-select from the tags table, plus "create tag" with a color picker), and remind before (none / 15 min / 1 hour / 1 day / 3 days). At the top, an AI quick-add bar with a sparkle icon and placeholder "Try: call Rahul next Tue 3pm #office, mom's birthday 14 Nov every year". Submit calls supabase.functions.invoke('parse-task', { body: { text } }) and shows the returned tasks in an editable preview before saving them with source = 'ai'. Add a TODO comment because the function is built later, and show a "coming soon" toast if the call fails. Open the quick-add with ⌘K / Ctrl+K.
-3. News (/news): date picker over digests. Items grouped by category. Each card: serif headline, summary, a "Why it matters" line in muted indigo, source + relative time, an external-link button (new tab), a bookmark toggle (updates only news_items.is_saved), and a "Follow-up" badge when related_item_id is set, which opens the earlier item. A "Saved" tab lists bookmarked items. Empty state: "Your first digest arrives tomorrow morning."
-4. Insights (/insights): stat cards for articles scanned (sum of digests.sources_scanned), estimated reading time saved (3 min per article), tasks created by AI (tasks.source = 'ai'), and on-time completion rate, plus a 30-day bar chart of completions from task_completions (recharts).
-5. Settings (/settings): name, timezone, "About you" (with a note that it personalizes news ranking), categories, headline count, email times, digest on/off switch, manage tags (rename, recolor, delete), theme toggle, sign out.
+## What makes it unusual
 
-## Technical
-React Query for all data fetching, with optimistic updates for task toggles. Show all dates and times in the user's profiles.timezone. Route guards: logged out → landing/login; not onboarded → /onboarding.
+**It is agent-addressable by construction.** The app exposes its own MCP server, so Claude Code
+— already holding your repo, your branch and your diff — files its own follow-up tasks, with the
+repo name, the file paths and a "Next: …" line, without you leaving the terminal. The same tool
+handlers serve the chat UI, the Telegram bot and the cron planner.
 
-This project was built with [Lovable](https://lovable.dev).
+**What you follow is a vector query, not a dropdown.** Type "Kubernetes security" or
+"semiconductor manufacturing in India" and it is embedded once and matched by meaning against
+every article in the pool. No new feed, no extra cost per digest, and it shows you what the
+phrase would have matched _before_ you commit — including telling you honestly when nothing in
+the archive is close.
 
-**Live app**: https://dailyedgeapp.lovable.app
+**Stories thread themselves.** Today's article points back at the earlier one it continues,
+found by cosine similarity rather than keywords. The Jio IPO came out as a real chain:
+grey-market premium on Oct 15, again on Oct 18, listing day on Oct 25.
 
-## Build with Lovable
+**Each door has different permissions by construction.** Not by prompting — by allowlist. The
+chat can complete a task; a voice device cannot, because it may have misheard and shows nothing
+back; the cron planner has no write tools at all, because it acts with nobody present.
 
-Continue developing this project in the [Lovable editor](https://lovable.dev/projects/65ec949b-f1a1-46cb-864b-dab60ad79377).
+**Citations are checked, not trusted.** Every retrieval tool records what it returned, and any
+URL in an answer that no tool produced is reported to the user with a warning. A fabricated link
+is worse than a wrong summary — the summary is visibly an opinion, a URL looks like a fact.
 
-- **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: every change made in Lovable is committed straight to this repository.
-- **Full ownership**: this code is yours. Push to `main` on GitHub and your changes sync back into Lovable, ready for your next prompt.
+---
 
-## Development
+## Where to look
 
-Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
+|                                                  |                                                                                                 |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| **[docs/architecture.md](docs/architecture.md)** | System overview, data flow, tech stack, key decisions. Start here.                              |
+| **[docs/mcp-workflow.md](docs/mcp-workflow.md)** | Model Context Protocol in _both_ directions — as the development loop and as a product surface. |
+| **[docs/decisions.md](docs/decisions.md)**       | Decisions worth not relitigating, and every measured constant with how it was measured.         |
+| **[docs/process.md](docs/process.md)**           | The skills, subagents and hooks in `.claude/`, and the findings each produced.                  |
+| **[docs/README.md](docs/README.md)**             | Full documentation map.                                                                         |
+| **[CLAUDE.md](CLAUDE.md)**                       | The guidelines loaded into every agent session — 117 lines, by design.                          |
+| **[docs/roadmap.md](docs/roadmap.md)**           | What is built, what is verified, and what is **not yet exercised**.                             |
+| **[docs/plans/](docs/plans/)**                   | Self-contained implementation plans for the remaining work.                                     |
 
-```sh
-git clone <this-repository-url>
-cd <repository-name>
-npm i
-npm run dev
+---
+
+## Stack
+
+React 19 · Vite · TypeScript · Tailwind 4 · shadcn/ui · TanStack Router (SSR via nitro) ·
+Supabase (Postgres 17, pgvector/HNSW, pg_cron, pg_net, Vault, Auth, Edge Functions on Deno) ·
+Google Gemini (parsing, ranking, agent tool-calling, embeddings) · Model Context Protocol ·
+Gmail SMTP · Telegram Bot API · Web Push
+
+**12 Edge Functions · 19 migrations · 122 tests · 6 skills · 6 subagents · 2 hooks**
+
+---
+
+## Running it
+
+```bash
+npm install
+npm run dev          # http://localhost:3000
+npm test             # 122 tests, ~1.5s
+npm run lint         # 0 errors (12 pre-existing shadcn warnings)
+npm run build
 ```
+
+The frontend needs `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` — both already in `.env`,
+because both are designed to be public. Everything else is server-side: the Gemini key, SMTP
+credentials, the Telegram bot token and the VAPID keys live only in the platform's secret store,
+because **the browser never calls a model and never holds a key.**
+
+Deploying functions needs a Supabase access token in `.env.local` (gitignored):
+
+```bash
+npx supabase functions deploy <name> --project-ref <ref>
+```
+
+See [docs/operations.md](docs/operations.md).
+
+---
+
+## Verifying the claims
+
+Nothing here needs to be taken on faith. With the Supabase MCP connected:
+
+```sql
+-- the agent audit trail, by front door
+select surface, count(*), count(*) filter (where not ok) as failures
+from mcp_tool_calls group by surface;
+
+-- ownership: ask for user B with user A's embedding, get none of A's rows
+with seed as (select user_id, embedding from news_items where embedding is not null limit 1),
+     other as (select distinct user_id from news_items
+               where user_id <> (select user_id from seed) limit 1)
+select count(*) as leaked from seed, other,
+  match_news_items(other.user_id, seed.embedding, 50, null, 0) m
+where m.id in (select id from news_items where user_id = (select user_id from seed));
+
+-- story threads found by similarity alone
+select count(*) from news_items where related_item_id is not null;
+```
+
+And the guardrail that stops an agent dropping a production table:
+
+```bash
+echo '{"tool_name":"mcp__supabase__execute_sql","tool_input":{"query":"drop table tasks"}}' \
+  | .claude/hooks/block-destructive-sql.sh; echo "exit=$?"   # exit=2
+```
+
+`git log --oneline pre-hackathon..HEAD` is the recent work; the commit **bodies** carry the
+reasoning, including why a similarity threshold is 0.90 and not the 0.85 originally specified.
+
+---
+
+## Honest limitations
+
+Kept current in [docs/roadmap.md](docs/roadmap.md) and [docs/gotchas.md](docs/gotchas.md). The
+ones that matter:
+
+- The Gemini **free tier caps embeddings at 100 requests/minute**, and `batchEmbedContents`
+  counts each _text_. That is the binding constraint on pool size; a repair job now drains any
+  shortfall every ten minutes so a lost vector is no longer permanent.
+- Current Google News `/rss/articles/CBMi…` links **cannot be resolved server-side at all** —
+  the id is opaque and the redirect is client-side JS. Those items keep the redirect and are
+  labelled "via Google News".
+- Gmail caps sending at ~500/day. Fine now; sending is behind one module so swapping to Resend
+  is a one-file change.
+- The `agent` function's happy path **is not automatically tested**: a user JWT cannot be minted
+  outside a browser session. Its refusals are tested.
+
+---
+
+Built with [Claude Code](https://claude.com/claude-code); the initial UI scaffold came from
+[Lovable](https://lovable.dev), which syncs two-way with the default branch.
