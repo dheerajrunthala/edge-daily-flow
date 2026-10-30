@@ -167,6 +167,10 @@ function SettingsPage() {
               </label>
               <div className="space-y-2">
                 <Label>Categories</Label>
+                <p className="text-xs text-muted-foreground">
+                  These six are fixed — each one maps to a curated set of feeds, so new categories
+                  cannot be typed in here.
+                </p>
                 <CategoryPicker
                   value={prefs.categories}
                   onChange={(c) =>
@@ -175,6 +179,13 @@ function SettingsPage() {
                       : toast("Keep at least one category")
                   }
                 />
+                <p className="text-xs text-muted-foreground">
+                  Looking for something more specific, like &ldquo;Kubernetes security&rdquo;?{" "}
+                  <a href="#topic" className="font-medium text-foreground underline">
+                    Follow it as a topic
+                  </a>{" "}
+                  below instead.
+                </p>
               </div>
               <div className="space-y-2">
                 <Label>Headlines per day</Label>
