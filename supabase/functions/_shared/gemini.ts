@@ -4,14 +4,44 @@
 // header, prompt in `contents`, structured output via generationConfig.responseSchema.
 
 /**
- * Parsing and other low-volume, accuracy-sensitive calls.
- * The "-latest" alias tracks the current Flash release, so this does not need bumping
- * every time Google ships one — at the cost of the model shifting under us over time.
+ * Model names, overridable by environment variable.
+ *
+ * The defaults are "-latest" aliases, which track the current release and so never need
+ * bumping — at the cost of the model shifting under us, and of sharing capacity with
+ * everyone else pointing at the same alias. That second cost is not theoretical: it lost
+ * three days of digests in October 2026.
+ *
+ * Pinning is therefore worth doing, but it is deliberately *not* hard-coded here. A pinned
+ * id that does not exist fails every call with a 404, which is a total and silent outage,
+ * and the id cannot be verified from a development environment because the API key lives
+ * only in the platform's secret store. So the owner pins with
+ * `supabase secrets set GEMINI_PARSE_MODEL=...` after checking the id against
+ * ListModels — no redeploy, and a bad value is one secret away from being reverted.
+ *
+ * Reading env at module load rather than per call is fine: a secret change restarts the
+ * isolate anyway.
  */
-export const GEMINI_PARSE_MODEL = "gemini-flash-latest";
+/**
+ * Guarded because this runs at module load, and module load happens under vitest too.
+ *
+ * Reading `Deno.env` unguarded here made every test file that transitively imports this
+ * module fail to collect with "Deno is not defined" — agent-registry.test.ts went from
+ * passing to not running at all, and the suite reported 106 passing instead of 118 with no
+ * failure to explain the twelve that vanished. A silent drop is worse than a red test.
+ *
+ * This is the same rule write-tests states from the other direction: a module is testable
+ * here only if everything it reaches at load time resolves outside the Edge runtime.
+ */
+const envModel = (name: string, fallback: string): string => {
+  const env = typeof Deno !== "undefined" ? Deno.env.get(name) : undefined;
+  return env?.trim() || fallback;
+};
+
+/** Parsing and other low-volume, accuracy-sensitive calls. */
+export const GEMINI_PARSE_MODEL = envModel("GEMINI_PARSE_MODEL", "gemini-flash-latest");
 
 /** Per-article news summarizing — high volume, so the cheap tier. */
-export const GEMINI_BULK_MODEL = "gemini-flash-lite-latest";
+export const GEMINI_BULK_MODEL = envModel("GEMINI_BULK_MODEL", "gemini-flash-lite-latest");
 
 /**
  * Where a call goes when the primary model is out of capacity.
@@ -22,10 +52,15 @@ export const GEMINI_BULK_MODEL = "gemini-flash-lite-latest";
  * failed real digests on 2026-10-24, -25 and -28. The lite tier is a different pool, and
  * a digest ranked by the cheaper model is enormously better than no digest at all.
  */
-export const GEMINI_FALLBACK_MODEL = "gemini-flash-lite-latest";
+export const GEMINI_FALLBACK_MODEL = envModel("GEMINI_FALLBACK_MODEL", "gemini-flash-lite-latest");
 
 /** News similarity. news_items.embedding is vector(768), so keep these in step. */
-export const GEMINI_EMBEDDING_MODEL = "gemini-embedding-001";
+/**
+ * Embeddings. Pinned already, and it must stay pinned: a vector from one model is not
+ * comparable with one from another, so changing this silently invalidates every stored
+ * embedding rather than failing. Changing it means re-embedding the pool and every topic.
+ */
+export const GEMINI_EMBEDDING_MODEL = envModel("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001");
 export const EMBEDDING_DIMENSIONS = 768;
 
 const API_ROOT = "https://generativelanguage.googleapis.com/v1beta";
@@ -97,6 +132,35 @@ function withDeadline(signal: AbortSignal | undefined, ms: number): AbortSignal 
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * How long the API itself says to wait, if it said.
+ *
+ * A quota 429 is categorically different from a capacity 503, and it took a production
+ * investigation to see it. The free tier caps embed_content at **100 requests per minute**,
+ * and batchEmbedContents counts each text as a request rather than each call — so a day's
+ * pool of ~150 articles across six simultaneously fanned-out categories exceeds it every
+ * morning. That is why 797 of 2,651 pooled articles had no vector.
+ *
+ * Exponential backoff cannot fix a per-minute quota: 1+2+4+8s is 15 seconds of patience for
+ * a window that resets in up to 60. The response says exactly how long to wait — both in
+ * `RetryInfo.retryDelay` and in prose ("Please retry in 49.215166941s") — so the only
+ * sensible policy is to believe it.
+ *
+ * Capped, because an unbounded wait inside a 150s runtime is the same lost error as an
+ * unbounded fetch.
+ */
+const MAX_HONOURED_RETRY_MS = 55_000;
+
+function retryAfterMs(body: string): number | null {
+  // The structured form Google sends alongside the message.
+  const structured = /"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(body);
+  const prose = /retry in (\d+(?:\.\d+)?)\s*s/i.exec(body);
+  const seconds = Number(structured?.[1] ?? prose?.[1]);
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  // A second of slack: retrying at the exact boundary loses the race often enough to matter.
+  return Math.min(Math.ceil(seconds * 1000) + 1_000, MAX_HONOURED_RETRY_MS);
+}
 
 /**
  * POST one generateContent request, with the retry and the three failure modes that
@@ -173,12 +237,13 @@ async function postGenerate(
       }
 
       if (attempt < step.attempts) {
-        // 1s, 2s, 4s, 8s, each with up to 500ms of jitter so parallel callers — the
-        // per-category ingest fan-out, say — do not retry in lockstep and re-create the
-        // spike they are backing off from.
-        const backoff = 1000 * 2 ** (attempt - 1) + Math.floor(Math.random() * 500);
+        // Prefer the wait the API asked for; otherwise 1s, 2s, 4s, 8s with up to 500ms of
+        // jitter so parallel callers — the per-category ingest fan-out, say — do not retry
+        // in lockstep and re-create the spike they are backing off from.
+        const asked = retryAfterMs(body);
+        const backoff = asked ?? 1000 * 2 ** (attempt - 1) + Math.floor(Math.random() * 500);
         console.warn(
-          `gemini ${res.status} on ${step.model}, retrying in ${backoff}ms (attempt ${attempt}/${step.attempts})`,
+          `gemini ${res.status} on ${step.model}, retrying in ${backoff}ms (attempt ${attempt}/${step.attempts})${asked ? " [as asked]" : ""}`,
         );
         await sleep(backoff);
       }
@@ -329,14 +394,15 @@ export async function embedBatch(
     });
     body = await res.text();
     if (res.ok || !RETRYABLE.has(res.status) || attempt === MAX_ATTEMPTS) break;
-    // Same policy as postGenerate. The embedding model shares the capacity pressure:
-    // 2026-10-28's ingest pooled 138 articles and embedded only 99 of them, and an
-    // article with no vector is invisible to topic matching and to follow-up linking
-    // for as long as it stays in the pool — which, because articles are upserted with
-    // ignoreDuplicates on a unique url, is forever.
-    const backoff = 1000 * 2 ** (attempt - 1) + Math.floor(Math.random() * 500);
+    // This is the path that actually hits the free-tier quota, so the API's own retryDelay
+    // matters more here than anywhere else: the limit is 100 embed requests per minute and
+    // batchEmbedContents counts each *text*, not each call. An article pooled without a
+    // vector stays vectorless forever — ignoreDuplicates on a unique url means it is never
+    // reconsidered — so losing a batch here is permanent, not transient.
+    const asked = retryAfterMs(body);
+    const backoff = asked ?? 1000 * 2 ** (attempt - 1) + Math.floor(Math.random() * 500);
     console.warn(
-      `embed ${res.status}, retrying in ${backoff}ms (attempt ${attempt}/${MAX_ATTEMPTS})`,
+      `embed ${res.status}, retrying in ${backoff}ms (attempt ${attempt}/${MAX_ATTEMPTS})${asked ? " [as asked]" : ""}`,
     );
     await sleep(backoff);
   }
