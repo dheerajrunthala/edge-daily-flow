@@ -53,7 +53,7 @@ verify_jwt = false   # or true
   Then read the result — pg_net records it in `net._http_response` keyed by the returned
   id. `BOOT_ERROR` there means a bad import; `IDLE_TIMEOUT` means something hung.
 - **User-JWT functions**: a user token cannot be minted from here (the service role key
-  lives only in the platform's secret store), so verify the refusals you *can* — anon and
+  lives only in the platform's secret store), so verify the refusals you _can_ — anon and
   the publishable key must both 401 — and have the owner exercise the happy path in the
   browser.
 - **MCP tools**: call them through the connected `daily-edge` MCP server and diff the

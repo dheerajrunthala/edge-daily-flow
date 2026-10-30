@@ -56,7 +56,7 @@ holding the publishable key. Neither fails loudly.
 - `security definer` plus `set search_path = public, extensions` if it touches `vector` —
   the extension is **not** in `public` on this project, and the parameter type will not
   resolve without it.
-- The owner resolved *inside* the body, not trusted from an argument:
+- The owner resolved _inside_ the body, not trusted from an argument:
   `v_user uuid := coalesce(auth.uid(), p_user_id);` lets a signed-in caller only ever
   reach their own rows while leaving the service-role path working.
 - `revoke execute on function ... from anon;` — Supabase grants EXECUTE to `anon` and
