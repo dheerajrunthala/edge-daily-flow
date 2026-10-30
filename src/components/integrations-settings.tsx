@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, Copy, KeyRound, Loader2, Plus, Trash2, TriangleAlert } from "lucide-react";
+import { Check, Copy, KeyRound, Loader2, Mic, Plus, Trash2, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { ListSkeleton } from "@/components/common";
 import { useApiTokenActions, useApiTokens, type ApiTokenRow } from "@/lib/queries";
@@ -127,6 +127,26 @@ export function IntegrationsSettings() {
             No tokens yet. Create one above to connect a client.
           </p>
         )}
+      </div>
+
+      {/* ------------------------------------------------------------- alexa */}
+      <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex min-w-0 items-start gap-2.5">
+          <Mic className="mt-0.5 size-4 shrink-0 text-primary" />
+          <div className="space-y-1">
+            <p className="text-sm font-medium">Alexa</p>
+            <p className="text-xs text-muted-foreground">
+              Linking happens from the Alexa app, not here — enable the &ldquo;Daily Edge&rdquo;
+              skill and it opens account linking for you. That creates a token named
+              &ldquo;Alexa&rdquo;, shown in the list above like any other. Voice can read your news
+              and tasks and add new tasks, but it deliberately cannot complete or delete anything,
+              since a speaker may have misheard and shows you nothing to check first.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Revoking the &ldquo;Alexa&rdquo; token above stops the skill immediately.
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* ------------------------------------------------------------- setup */}
