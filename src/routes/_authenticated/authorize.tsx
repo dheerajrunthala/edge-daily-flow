@@ -31,19 +31,30 @@ export const Route = createFileRoute("/_authenticated/authorize")({
 });
 
 /**
- * The hosts Amazon actually redirects account linking to, by region.
+ * Which redirect targets are acceptable.
  *
- * An allowlist rather than a pattern, and checked on host AND path. A hand-rolled authorize
- * endpoint that reflects an arbitrary redirect_uri is an open redirector: anyone could send
- * a user here and collect a live API token at a URL of their choosing. This is the most
- * important check in the file.
+ * This is the most important check in the file. A hand-rolled authorize endpoint that
+ * reflects an arbitrary redirect_uri is an open redirector, and what it would hand out here
+ * is a live API token — so anyone could send a user to this page and collect their
+ * credential at a URL of their choosing.
+ *
+ * It was first written as a fixed set of four hostnames (layla / pitangui / alexa.amazon.com
+ * / alexa.amazon.co.jp), which is the list every tutorial gives. That rejected a real linking
+ * attempt from India: Amazon has a marketplace host per region and uses whichever matches the
+ * account. Enumerating them is a losing game — the list is undocumented and grows.
+ *
+ * So the rule is now structural rather than a list: the host must be Amazon-owned, and the
+ * path must be Amazon's account-linking path. Both halves matter.
+ *
+ * The suffix is matched as `(^|\.)amazon.<public-suffix>` deliberately. A naive
+ * `endsWith("amazon.com")` would also accept `evil-amazon.com`, which is exactly the bug
+ * this kind of check usually ships with.
  */
-const ALLOWED_HOSTS = new Set([
-  "layla.amazon.com",
-  "pitangui.amazon.com",
-  "alexa.amazon.co.jp",
-  "alexa.amazon.com",
-]);
+const AMAZON_HOST =
+  /(^|\.)amazon\.(com|co\.uk|co\.jp|in|de|fr|it|es|nl|se|pl|com\.au|com\.br|com\.mx|com\.tr|sa|ae|eg|ca|cn|sg)$/i;
+
+/** Amazon's account-linking callback path, across every region. */
+const LINK_PATH = "/api/skill/link/";
 
 function redirectAllowed(raw: string): URL | null {
   let url: URL;
@@ -53,9 +64,25 @@ function redirectAllowed(raw: string): URL | null {
     return null;
   }
   if (url.protocol !== "https:") return null;
-  if (!ALLOWED_HOSTS.has(url.hostname)) return null;
-  if (!url.pathname.startsWith("/api/skill/link/")) return null;
+  if (!AMAZON_HOST.test(url.hostname)) return null;
+  if (!url.pathname.startsWith(LINK_PATH)) return null;
   return url;
+}
+
+/** Why a redirect was refused, specific enough to act on. */
+function refusalReason(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return `“${raw}” is not a valid URL.`;
+  }
+  if (url.protocol !== "https:") return `“${url.protocol}” is not https.`;
+  if (!AMAZON_HOST.test(url.hostname)) return `“${url.hostname}” is not an Amazon domain.`;
+  if (!url.pathname.startsWith(LINK_PATH)) {
+    return `the path “${url.pathname}” is not Amazon's account-linking path (${LINK_PATH}…).`;
+  }
+  return "it did not match the expected shape.";
 }
 
 function Authorize() {
@@ -68,8 +95,19 @@ function Authorize() {
   const target = redirect_uri ? redirectAllowed(redirect_uri) : null;
 
   useEffect(() => {
-    if (!redirect_uri) setError("This page was opened without a redirect target.");
-    else if (!target) setError("That redirect address is not one Alexa uses. Nothing was linked.");
+    if (!redirect_uri) {
+      setError("This page was opened without a redirect target. Nothing was linked.");
+      return;
+    }
+    if (!target) {
+      // The rejected value is shown, not hidden. The first version of this page said only
+      // "that redirect address is not one Alexa uses", which is true, useless, and left no
+      // way to find out which address Amazon had actually sent.
+      setError(
+        `Nothing was linked: ${refusalReason(redirect_uri)}\n\nAmazon sent:\n${redirect_uri}`,
+      );
+      console.error("[authorize] refused redirect_uri", redirect_uri);
+    }
   }, [redirect_uri, target]);
 
   const link = async () => {
@@ -108,7 +146,7 @@ function Authorize() {
           <div className="space-y-3">
             <p className="text-destructive flex items-start gap-2 text-sm">
               <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-              <span>{error}</span>
+              <span className="break-all whitespace-pre-wrap">{error}</span>
             </p>
             <Button variant="outline" onClick={() => navigate({ to: "/settings" })}>
               Back to settings
